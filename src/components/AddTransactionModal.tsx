@@ -1,0 +1,664 @@
+'use client';
+
+import {
+  Plus,
+  Camera,
+  ChevronLeft,
+  Loader2,
+  CheckCircle2,
+  Circle,
+  Image as ImageIcon,
+  Paperclip,
+  MessageSquare,
+  Trash2,
+  Layers,
+  ScanLine,
+} from 'lucide-react';
+import { useState } from 'react';
+import { ReceiptItem, SplitType, Transaction, User } from '@/types';
+import { getItemRequestedAmount } from '@/lib/utils';
+import { useTransactionForm } from '@/hooks/useTransactionForm';
+import { ResubmitData } from '@/hooks/useTransactions';
+import { ReceiptImageModal } from './ReceiptImageModal';
+
+interface AddTransactionModalProps {
+  currentUser: User;
+  otherDisplayName: string;
+  onSuccess?: (newTx: Transaction) => void;
+  onClose: () => void;
+  editTransaction?: Transaction;
+  onResubmit?: (id: string, data: ResubmitData) => Promise<void>;
+}
+
+function ReceiptItemRow({
+  item,
+  onToggleSelection,
+  onUpdateSplit,
+  onUpdateCustomValue,
+  onUpdateDetail,
+  onDelete,
+}: {
+  item: ReceiptItem;
+  onToggleSelection: (id: string) => void;
+  onUpdateSplit: (id: string, splitType: SplitType) => void;
+  onUpdateCustomValue: (id: string, val: string) => void;
+  onUpdateDetail: (id: string, field: 'name' | 'price', val: string) => void;
+  onDelete: (id: string) => void;
+}) {
+  return (
+    <div
+      className={`flex flex-col p-4 transition-colors ${item.selected ? 'bg-white' : 'bg-gray-50/50'}`}
+    >
+      <div className="flex items-start justify-between">
+        <div className="flex items-start gap-3 w-full pr-4">
+          <button
+            type="button"
+            onClick={() => onToggleSelection(item.id)}
+            className="text-blue-600 focus:outline-none mt-1 shrink-0"
+          >
+            {item.selected ? (
+              <CheckCircle2 size={24} className="fill-blue-600 text-white" />
+            ) : (
+              <Circle size={24} className="text-gray-300" />
+            )}
+          </button>
+          <div className="w-full">
+            <input
+              type="text"
+              value={item.name}
+              onChange={e => onUpdateDetail(item.id, 'name', e.target.value)}
+              placeholder="品名"
+              className={`w-full text-sm font-medium bg-transparent border-b border-transparent focus:border-gray-300 outline-none pb-0.5
+                ${item.selected ? 'text-gray-900' : 'text-gray-400 line-through'}`}
+            />
+          </div>
+        </div>
+        <div className="flex items-center gap-1 shrink-0">
+          <span className="text-sm font-bold text-gray-400">¥</span>
+          <input
+            type="number"
+            value={item.price || ''}
+            onChange={e => onUpdateDetail(item.id, 'price', e.target.value)}
+            placeholder="0"
+            className={`w-16 text-right font-bold bg-transparent border-b border-transparent focus:border-gray-300 outline-none pb-0.5
+              ${item.selected ? 'text-gray-900' : 'text-gray-400'}`}
+          />
+        </div>
+      </div>
+
+      {item.selected && (
+        <div className="mt-4 pl-9 space-y-3 animate-in slide-in-from-top-2 duration-200">
+          <div className="flex bg-gray-100 p-1 rounded-lg">
+            {(['none', 'split', 'full', 'amount', 'percentage'] as SplitType[]).map(type => {
+              const labels: Record<SplitType, string> = {
+                none: '未設定',
+                split: '割り勘',
+                full: '全額',
+                amount: '金額',
+                percentage: '割合',
+              };
+              return (
+                <button
+                  key={type}
+                  onClick={() => onUpdateSplit(item.id, type)}
+                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${
+                    item.splitType === type
+                      ? type === 'none'
+                        ? 'bg-white text-gray-700 shadow-sm'
+                        : 'bg-white text-blue-700 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-700'
+                  }`}
+                >
+                  {labels[type]}
+                </button>
+              );
+            })}
+          </div>
+
+          {item.splitType !== 'split' && item.splitType !== 'none' && item.splitType !== 'full' && (
+            <div className="flex items-center gap-2">
+              <span className="text-xs font-medium text-gray-600">
+                {item.splitType === 'amount' ? '相手の負担額:' : '相手の負担割合:'}
+              </span>
+              <input
+                type="number"
+                value={item.customValue}
+                onChange={e => onUpdateCustomValue(item.id, e.target.value)}
+                placeholder="0"
+                className="w-20 text-sm font-bold border-b-2 border-gray-300 focus:border-blue-600 outline-none text-center pb-0.5 bg-transparent"
+              />
+              <span className="text-xs font-medium text-gray-600">
+                {item.splitType === 'amount' ? '円' : '%'}
+              </span>
+            </div>
+          )}
+
+          <div className="flex items-center justify-between border-t border-gray-100/50 pt-2 mt-2">
+            <button
+              onClick={() => onDelete(item.id)}
+              className="text-[10px] text-gray-400 hover:text-red-500 flex items-center gap-1"
+            >
+              <Trash2 size={12} /> 削除
+            </button>
+            <span
+              className={`text-xs font-bold px-2 py-1 rounded ${
+                item.splitType === 'none' ? 'text-gray-500 bg-gray-100' : 'text-blue-600 bg-blue-50'
+              }`}
+            >
+              相手の負担: ¥{getItemRequestedAmount(item).toLocaleString()}
+            </span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** 一括設定バー: 選択中の全アイテムにまとめて splitType を適用する */
+function BulkSplitSetter({
+  onApply,
+}: {
+  onApply: (splitType: SplitType, customValue: string) => void;
+}) {
+  const [bulkType, setBulkType] = useState<Exclude<SplitType, 'none'> | null>(null);
+  const [bulkCustom, setBulkCustom] = useState('');
+
+  const handleSelectType = (type: Exclude<SplitType, 'none'>) => {
+    const next = bulkType === type ? null : type;
+    setBulkType(next);
+    setBulkCustom('');
+    if (next === 'split' || next === 'full') {
+      onApply(next, '');
+    }
+  };
+
+  const handleApplyCustom = () => {
+    if (!bulkType) return;
+    onApply(bulkType, bulkCustom);
+  };
+
+  const labels: Record<Exclude<SplitType, 'none'>, string> = {
+    split: '割り勘',
+    full: '全額',
+    amount: '金額',
+    percentage: '割合',
+  };
+
+  return (
+    <div className="p-3 bg-amber-50 border-b border-amber-100 space-y-2">
+      <div className="flex items-center gap-1.5">
+        <Layers size={13} className="text-amber-600" />
+        <p className="text-xs font-bold text-amber-700">一括設定（チェック中の項目に適用）</p>
+      </div>
+      <div className="flex items-center gap-2 flex-wrap">
+        {(['split', 'full', 'amount', 'percentage'] as const).map(type => (
+          <button
+            key={type}
+            onClick={() => handleSelectType(type)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
+              bulkType === type
+                ? 'bg-amber-500 text-white shadow-sm'
+                : 'bg-white text-gray-600 border border-gray-200 hover:border-amber-400 hover:text-amber-700'
+            }`}
+          >
+            {labels[type]}
+          </button>
+        ))}
+      </div>
+
+      {(bulkType === 'amount' || bulkType === 'percentage') && (
+        <div className="flex items-center gap-2 animate-in slide-in-from-top-1 duration-150">
+          <span className="text-xs text-gray-600 font-medium">
+            {bulkType === 'amount' ? '負担額:' : '負担割合:'}
+          </span>
+          <input
+            type="number"
+            value={bulkCustom}
+            onChange={e => setBulkCustom(e.target.value)}
+            placeholder="0"
+            className="w-20 text-xs font-bold border border-gray-300 focus:border-amber-500 rounded-lg px-2 py-1.5 outline-none text-center bg-white"
+          />
+          <span className="text-xs text-gray-500">{bulkType === 'amount' ? '円' : '%'}</span>
+          <button
+            onClick={handleApplyCustom}
+            disabled={!bulkCustom}
+            className="px-3 py-1.5 bg-amber-500 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg text-xs font-bold transition-colors"
+          >
+            適用
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+export function AddTransactionModal({
+  currentUser,
+  otherDisplayName,
+  onSuccess,
+  onClose,
+  editTransaction,
+  onResubmit,
+}: AddTransactionModalProps) {
+  const isEditMode = !!editTransaction;
+  const [isResubmitting, setIsResubmitting] = useState(false);
+  const [receiptModalUrl, setReceiptModalUrl] = useState<string | null>(null);
+
+  const form = useTransactionForm(
+    currentUser,
+    newTx => {
+      onSuccess?.(newTx);
+      onClose();
+    },
+    editTransaction,
+  );
+
+  const handleClose = () => {
+    form.resetForm();
+    onClose();
+  };
+
+  const handleResubmitClick = async () => {
+    if (!editTransaction || !onResubmit) return;
+    const numAmount = parseInt(form.inputAmount, 10);
+    if (!numAmount || numAmount <= 0) {
+      alert('金額を入力してください');
+      return;
+    }
+    if (form.scannedItems && form.scannedItems.length > 0) {
+      if (form.scannedItems.some(item => item.selected && item.splitType === 'none')) {
+        alert('精算方法が選ばれていない項目があります。\nチェックした項目すべてに「割り勘」などを設定してください。');
+        return;
+      }
+    } else {
+      if (form.splitType === 'none') {
+        alert('精算方法（割り勘など）を選択してください。');
+        return;
+      }
+    }
+    try {
+      setIsResubmitting(true);
+      await onResubmit(editTransaction.id, {
+        amount: numAmount,
+        category: form.category,
+        splitType: form.scannedItems && form.scannedItems.length > 0 ? 'split' : form.splitType,
+        requestedAmount: form.getRequestedAmount(),
+        receiptItems: form.scannedItems || [],
+        receiptImageUrl: form.receiptImageUrl || undefined,
+        message: form.message,
+      });
+      onClose();
+    } finally {
+      setIsResubmitting(false);
+    }
+  };
+
+  const isSubmitting = isEditMode ? isResubmitting : form.isSubmitting;
+  const handleSubmitOrResubmit = isEditMode ? handleResubmitClick : form.handleSubmit;
+
+  return (
+    <div className="fixed inset-0 bg-gray-50 z-50 flex flex-col animate-in slide-in-from-bottom-full duration-300">
+      <header className="flex items-center justify-between p-4 bg-white relative z-10 shadow-sm">
+        <div className="flex items-center">
+          <button
+            onClick={handleClose}
+            className="p-2 -ml-2 text-gray-500 hover:bg-gray-100 rounded-full transition-colors"
+          >
+            <ChevronLeft size={24} />
+          </button>
+          <h2 className="text-base font-bold text-gray-800 ml-1">
+            {isEditMode ? '内容を修正して再申請' : '立替の申請'}
+          </h2>
+        </div>
+      </header>
+
+      <main className="flex-1 overflow-y-auto px-5 pt-6 pb-40">
+        <div className="max-w-lg mx-auto space-y-8">
+
+          {/* ステップ1：レシート撮影 / 写真添付 / 基本情報 */}
+          <div className="space-y-4">
+            <div className="flex items-center gap-2 mb-2">
+              <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
+                1
+              </div>
+              <h3 className="font-bold text-gray-800">レシート読み取り・基本情報</h3>
+            </div>
+
+            {/* カメラ/ファイル選択UI (スキャン済みでない場合のみ) */}
+            {!form.scannedItems ? (
+              <div className="space-y-3">
+                {/* カメラで撮る & 写真を添付 */}
+                <div className="grid grid-cols-2 gap-3">
+                  {/* ① カメラ直接起動 */}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    onChange={form.handleFileChange}
+                    ref={form.fileInputRef}
+                    disabled={form.isScanning}
+                    className="hidden"
+                    id="camera-input"
+                  />
+                  <label
+                    htmlFor="camera-input"
+                    className={`flex flex-col items-center justify-center gap-2 bg-white border-2 border-dashed rounded-2xl p-5 transition-all cursor-pointer select-none
+                      ${form.isScanning ? 'border-blue-200 bg-blue-50/50 pointer-events-none' : 'border-gray-300 hover:border-blue-400 hover:bg-blue-50/50'}`}
+                  >
+                    {form.isScanning ? (
+                      <Loader2 size={28} className="text-blue-500 animate-spin" />
+                    ) : (
+                      <div className="bg-blue-50 p-2.5 rounded-full text-blue-600">
+                        <Camera size={24} />
+                      </div>
+                    )}
+                    <div className="text-center">
+                      <span className="text-xs font-bold block text-gray-800">
+                        {form.isScanning ? '読み取り中...' : 'カメラで撮る'}
+                      </span>
+                    </div>
+                  </label>
+
+                  {/* ② ギャラリー/ファイルから選択 */}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={form.handleFileChange}
+                    ref={form.galleryInputRef}
+                    disabled={form.isScanning}
+                    className="hidden"
+                    id="gallery-input"
+                  />
+                  <label
+                    htmlFor="gallery-input"
+                    className={`flex flex-col items-center justify-center gap-2 bg-white border-2 border-dashed rounded-2xl p-5 transition-all cursor-pointer select-none
+                      ${form.isScanning ? 'border-gray-200 bg-gray-50/50 pointer-events-none' : 'border-gray-300 hover:border-blue-400 hover:bg-blue-50/50'}`}
+                  >
+                    <div className={`p-2.5 rounded-full ${form.isScanning ? 'bg-gray-100 text-gray-400' : 'bg-blue-50 text-blue-600'}`}>
+                      <Paperclip size={24} />
+                    </div>
+                    <div className="text-center">
+                      <span className="text-xs font-bold block text-gray-800">写真を添付</span>
+                    </div>
+                  </label>
+                </div>
+
+                {!form.isScanning && (
+                  <button
+                    onClick={form.addManualItem}
+                    className="w-full bg-white border border-gray-200 hover:border-blue-400 hover:bg-blue-50 text-blue-600 font-bold py-3 rounded-xl transition-colors text-sm shadow-sm"
+                  >
+                    レシートなしで明細を手動入力する
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="bg-blue-50 text-blue-700 px-4 py-3 rounded-xl text-sm font-bold flex justify-between items-center border border-blue-100">
+                <span className="flex items-center gap-2">
+                  <CheckCircle2 size={16} /> 明細入力モード
+                </span>
+                <button
+                  onClick={() => {
+                    form.setScannedItems(null);
+                    form.setReceiptImageUrl(null);
+                    form.setInputAmount('');
+                  }}
+                  className="text-xs text-blue-600 bg-white px-2 py-1.5 rounded shadow-sm hover:bg-gray-50 transition-colors font-semibold"
+                >
+                  再スキャン
+                </button>
+              </div>
+            )}
+
+            <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 space-y-4">
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1.5">
+                  用途（カテゴリ）
+                </label>
+                <input
+                  type="text"
+                  value={form.category}
+                  onChange={e => form.setCategory(e.target.value)}
+                  placeholder="お店の名前や用途（例：スーパー、〇〇代）"
+                  className="w-full bg-gray-50 border border-gray-200 text-gray-800 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block p-3 outline-none font-medium"
+                />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1.5">
+                  合計金額（手入力も可）
+                </label>
+                <div className="flex items-center bg-gray-50 border border-gray-200 rounded-xl px-3 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all">
+                  <span className="text-gray-500 font-bold mr-1">¥</span>
+                  <input
+                    type="number"
+                    value={form.inputAmount}
+                    onChange={e => form.setInputAmount(e.target.value)}
+                    className="w-full bg-transparent text-lg font-bold text-gray-900 outline-none py-2.5"
+                    placeholder="0"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* ステップ2：明細の確認と請求対象の選択 */}
+          {form.scannedItems && (
+            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="flex items-center justify-between mb-2">
+                <div className="flex items-center gap-2">
+                  <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
+                    2
+                  </div>
+                  <h3 className="font-bold text-gray-800">明細の確認と負担設定</h3>
+                </div>
+              </div>
+
+              {/* 添付レシート画像プレビュー（タップで全画面表示） */}
+              {form.receiptImageUrl && (
+                <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                  <div className="p-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <ImageIcon size={14} className="text-gray-500" />
+                      <p className="text-xs font-medium text-gray-600">添付レシート（お互いに確認できます）</p>
+                    </div>
+                    <button
+                      onClick={() => setReceiptModalUrl(form.receiptImageUrl)}
+                      className="flex items-center gap-1 text-[11px] font-bold text-blue-600 bg-blue-50 px-2.5 py-1 rounded-lg hover:bg-blue-100 transition-colors"
+                    >
+                      <ScanLine size={12} /> 大きく見る
+                    </button>
+                  </div>
+                  <button
+                    onClick={() => setReceiptModalUrl(form.receiptImageUrl)}
+                    className="w-full block active:opacity-80 transition-opacity"
+                  >
+                    <img
+                      src={form.receiptImageUrl}
+                      alt="添付レシート"
+                      className="w-full object-contain max-h-48"
+                    />
+                  </button>
+                </div>
+              )}
+
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
+                <div className="p-3 bg-blue-50 border-b border-blue-100 flex items-center gap-2">
+                  <ImageIcon size={16} className="text-blue-600" />
+                  <p className="text-xs font-medium text-blue-800">
+                    相手に請求する項目にチェックを入れ、負担割合を設定してください
+                  </p>
+                </div>
+
+                {/* 一括設定バー */}
+                <BulkSplitSetter onApply={form.bulkUpdateSplit} />
+
+                <div className="divide-y divide-gray-100">
+                  {form.scannedItems.map(item => (
+                    <ReceiptItemRow
+                      key={item.id}
+                      item={item}
+                      onToggleSelection={form.toggleItemSelection}
+                      onUpdateSplit={form.updateItemSplit}
+                      onUpdateCustomValue={form.updateItemCustomValue}
+                      onUpdateDetail={form.updateItemDetail}
+                      onDelete={form.deleteItem}
+                    />
+                  ))}
+                </div>
+
+                <div className="p-3 border-t border-gray-100 bg-gray-50/50 flex justify-center">
+                  <button
+                    onClick={form.addManualItem}
+                    className="flex items-center gap-1.5 text-sm font-bold text-blue-600 hover:text-blue-700 py-2 px-4 rounded-lg hover:bg-blue-50 transition-colors"
+                  >
+                    <Plus size={16} /> 手動で項目を追加する
+                  </button>
+                </div>
+
+                <div className="p-4 bg-gray-50 flex justify-between items-center border-t border-gray-100">
+                  <span className="text-sm font-bold text-gray-600">共通の支払総額</span>
+                  <span className="text-xl font-bold text-gray-900">
+                    ¥{form.getSharedTotal().toLocaleString()}
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* ステップ2（代替）：手動入力のみの場合の負担方法選択 */}
+          {form.inputAmount && !form.scannedItems && (
+            <div className="space-y-4 animate-in fade-in duration-500">
+              <div className="flex items-center gap-2 mb-2">
+                <div className="w-6 h-6 rounded-full bg-blue-600 text-white flex items-center justify-center text-xs font-bold">
+                  2
+                </div>
+                <h3 className="font-bold text-gray-800">相手への請求額</h3>
+              </div>
+
+              <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+                <div className="flex bg-gray-100 p-1 rounded-xl mb-6">
+                  {(['none', 'split', 'full', 'amount', 'percentage'] as SplitType[]).map(type => {
+                    const labels: Record<SplitType, string> = {
+                      none: '未設定',
+                      split: '割り勘',
+                      full: '全額',
+                      amount: '金額',
+                      percentage: '割合',
+                    };
+                    return (
+                      <button
+                        key={type}
+                        onClick={() => form.setSplitType(type)}
+                        className={`flex-1 py-2 text-sm font-bold rounded-lg transition-all ${
+                          form.splitType === type
+                            ? type === 'none'
+                              ? 'bg-white text-gray-700 shadow-sm'
+                              : 'bg-white text-blue-700 shadow-sm'
+                            : 'text-gray-500 hover:text-gray-700'
+                        }`}
+                      >
+                        {labels[type]}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {form.splitType !== 'split' && form.splitType !== 'none' && form.splitType !== 'full' && (
+                  <div className="mb-6 flex justify-center items-center gap-2">
+                    <span className="text-sm font-medium text-gray-600">
+                      {form.splitType === 'amount' ? '相手の負担額:' : '相手の負担割合:'}
+                    </span>
+                    <input
+                      type="number"
+                      value={form.customValue}
+                      onChange={e => form.setCustomValue(e.target.value)}
+                      placeholder="0"
+                      className="w-24 text-xl font-bold border-b-2 border-gray-300 focus:border-blue-600 outline-none text-center pb-1 bg-transparent"
+                    />
+                    <span className="text-sm font-medium text-gray-600">
+                      {form.splitType === 'amount' ? '円' : '%'}
+                    </span>
+                  </div>
+                )}
+
+                <div className="text-center pt-2">
+                  <p className="text-xs font-bold text-gray-500 mb-1">
+                    最終的に {otherDisplayName} に請求する額
+                  </p>
+                  <p className="text-4xl font-black text-blue-600">
+                    ¥{form.getRequestedAmount().toLocaleString()}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 最終的な結果表示（明細ありの場合） */}
+          {form.scannedItems && (
+            <div className="bg-blue-50/50 border border-blue-100 p-5 rounded-2xl animate-in fade-in duration-500">
+              <div className="text-center pt-2">
+                <p className="text-xs font-bold text-gray-500 mb-1">
+                  最終的に {otherDisplayName} に請求する合計額
+                </p>
+                <p className="text-4xl font-black text-blue-600">
+                  ¥{form.getRequestedAmount().toLocaleString()}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* ひとことメッセージ */}
+          <div className="animate-in fade-in duration-500">
+            <div className="flex items-center gap-2 mb-3">
+              <div className="w-6 h-6 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center">
+                <MessageSquare size={14} />
+              </div>
+              <h3 className="font-bold text-gray-800 text-sm">思いやりコメント（任意）</h3>
+            </div>
+            <textarea
+              value={form.message}
+              onChange={e => form.setMessage(e.target.value)}
+              placeholder="例：大きい金額の立替ありがとう！など"
+              rows={2}
+              className="w-full bg-white border border-gray-200 text-gray-800 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block p-4 outline-none resize-none shadow-sm transition-all placeholder:text-gray-400"
+            />
+          </div>
+
+        </div>
+      </main>
+
+      {receiptModalUrl && (
+        <ReceiptImageModal imageUrl={receiptModalUrl} onClose={() => setReceiptModalUrl(null)} />
+      )}
+
+      <footer className="fixed bottom-0 left-0 right-0 p-5 bg-white border-t border-gray-100 pb-safe z-20 shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
+        <div className="max-w-lg mx-auto">
+          <button
+            onClick={handleSubmitOrResubmit}
+            disabled={
+              !form.inputAmount ||
+              parseInt(form.inputAmount, 10) <= 0 ||
+              form.isScanning ||
+              isSubmitting
+            }
+            className={`w-full disabled:bg-gray-300 disabled:text-gray-500 disabled:cursor-not-allowed text-white font-bold text-lg py-4 rounded-xl shadow-md active:scale-[0.99] transition-all flex justify-center items-center gap-2 ${
+              isEditMode
+                ? 'bg-orange-500 hover:bg-orange-600 shadow-orange-500/20'
+                : 'bg-blue-600 hover:bg-blue-700 shadow-blue-600/20'
+            }`}
+          >
+            {isSubmitting ? (
+              <>
+                <Loader2 size={24} className="animate-spin" /> {isEditMode ? '再申請中...' : '申請中...'}
+              </>
+            ) : isEditMode ? (
+              `修正して再申請する`
+            ) : (
+              `${otherDisplayName} に申請する`
+            )}
+          </button>
+        </div>
+      </footer>
+    </div>
+  );
+}
