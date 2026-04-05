@@ -321,6 +321,31 @@ export function useTransactions(
       alert('拒否処理に失敗しました');
     });
 
+  /** 差戻し中かつ自分が申請した取引のみ削除（相手の承認不要） */
+  const deleteRejectedTransaction = async (id: string): Promise<boolean> => {
+    const target = transactions.find(
+      t => t.id === id && t.status === 'rejected' && t.paidBy === currentUser,
+    );
+    if (!target) return false;
+    if (!confirm('この差戻しされた申請を削除しますか？取り消せません。')) return false;
+
+    const key = `delete-rejected-${id}`;
+    if (processingIdsRef.current.has(key)) return false;
+    processingIdsRef.current.add(key);
+    try {
+      const { error } = await supabase.from('transactions').delete().eq('id', id);
+      if (error) throw error;
+      setTransactions(prev => prev.filter(tx => tx.id !== id));
+      return true;
+    } catch (err) {
+      console.error('Error deleting rejected transaction:', err);
+      alert('削除に失敗しました');
+      return false;
+    } finally {
+      processingIdsRef.current.delete(key);
+    }
+  };
+
   const requestSettlement = () =>
     withDedup('settlement-request', async () => {
       if (
@@ -412,6 +437,7 @@ export function useTransactions(
     requestDelete,
     approveDelete,
     rejectDelete,
+    deleteRejectedTransaction,
     requestSettlement,
     approveSettlement,
     rejectSettlement,

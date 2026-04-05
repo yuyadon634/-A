@@ -8,7 +8,6 @@ interface HeaderProps {
   balanceInfo: BalanceInfo;
   settleableCount: number;
   isWaitingForSettlementApproval: boolean;
-  onSwitchUser: () => void;
   onOpenSettings: () => void;
   onRequestSettlement: () => void;
 }
@@ -18,7 +17,6 @@ export function Header({
   balanceInfo,
   settleableCount,
   isWaitingForSettlementApproval,
-  onSwitchUser,
   onOpenSettings,
   onRequestSettlement,
 }: HeaderProps) {
@@ -35,13 +33,10 @@ export function Header({
             <Settings size={18} />
           </button>
         </h1>
-        <button
-          onClick={onSwitchUser}
-          className="flex items-center gap-2 bg-gray-100 px-3 py-1.5 rounded-full text-sm font-medium hover:bg-gray-200 transition-colors"
-        >
+        <div className="flex items-center gap-2 bg-gray-100 px-3 py-1.5 rounded-full text-sm font-medium select-none">
           <Users size={16} className="text-gray-500" />
           現在: <span className="text-blue-600 font-bold">{currentDisplayName}</span>
-        </button>
+        </div>
       </div>
 
       <div className="bg-gradient-to-br from-blue-500 to-indigo-600 rounded-2xl p-5 text-white shadow-md">

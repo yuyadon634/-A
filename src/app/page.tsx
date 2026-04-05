@@ -15,9 +15,20 @@ import { MyRejectedList } from '@/components/MyRejectedList';
 import { MyPendingList } from '@/components/MyPendingList';
 import { AddTransactionModal } from '@/components/AddTransactionModal';
 import { SettingsModal } from '@/components/SettingsModal';
+import { UserSelectScreen } from '@/components/UserSelectScreen';
+
+const STORAGE_KEY_USER = 'selectedUser';
 
 export default function Home() {
-  const [currentUser, setCurrentUser] = useState<User>('夫');
+  const [currentUser, setCurrentUser] = useState<User>(() => {
+    if (typeof window === 'undefined') return '夫';
+    const saved = localStorage.getItem(STORAGE_KEY_USER);
+    return saved === '妻' ? '妻' : '夫';
+  });
+  const [isUserSelected, setIsUserSelected] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem(STORAGE_KEY_USER) !== null;
+  });
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [expandedTxId, setExpandedTxId] = useState<string | null>(null);
@@ -39,8 +50,16 @@ export default function Home() {
     setExpandedTxId(prev => (prev === id ? null : id));
   };
 
-  const handleSwitchUser = () => {
-    setCurrentUser(prev => (prev === '夫' ? '妻' : '夫'));
+  const handleSelectUser = (user: User) => {
+    localStorage.setItem(STORAGE_KEY_USER, user);
+    setCurrentUser(user);
+    setIsUserSelected(true);
+  };
+
+  const handleChangeUser = () => {
+    localStorage.removeItem(STORAGE_KEY_USER);
+    setIsUserSelected(false);
+    setIsSettingsOpen(false);
   };
 
   const handleOpenSettings = () => setIsSettingsOpen(true);
@@ -53,6 +72,16 @@ export default function Home() {
   const handleSaveSettings = () => {
     settings.saveSettings(() => setIsSettingsOpen(false));
   };
+
+  if (!isUserSelected) {
+    return (
+      <UserSelectScreen
+        user1Name={settings.user1Name}
+        user2Name={settings.user2Name}
+        onSelect={handleSelectUser}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 font-sans pb-24 selection:bg-blue-100 relative">
@@ -67,7 +96,6 @@ export default function Home() {
         balanceInfo={tx.calcBalance()}
         settleableCount={tx.settleableTransactions.length}
         isWaitingForSettlementApproval={tx.isWaitingForSettlementApproval}
-        onSwitchUser={handleSwitchUser}
         onOpenSettings={handleOpenSettings}
         onRequestSettlement={tx.requestSettlement}
       />
@@ -109,6 +137,10 @@ export default function Home() {
           myRejectedTransactions={tx.myRejectedTransactions}
           currentUser={currentUser}
           onEdit={setEditingTransaction}
+          onDelete={async id => {
+            const ok = await tx.deleteRejectedTransaction(id);
+            if (ok && editingTransaction?.id === id) setEditingTransaction(null);
+          }}
         />
 
         <PendingDeleteList
@@ -167,6 +199,7 @@ export default function Home() {
           onChangeTempUser2Name={settings.setTempUser2Name}
           onSave={handleSaveSettings}
           onClose={handleCloseSettings}
+          onChangeUser={handleChangeUser}
         />
       )}
     </div>

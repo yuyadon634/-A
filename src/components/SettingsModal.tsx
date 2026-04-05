@@ -1,6 +1,6 @@
 'use client';
 
-import { X, Users } from 'lucide-react';
+import { X, Users, RefreshCw } from 'lucide-react';
 
 interface SettingsModalProps {
   tempUser1Name: string;
@@ -9,6 +9,7 @@ interface SettingsModalProps {
   onChangeTempUser2Name: (name: string) => void;
   onSave: () => void;
   onClose: () => void;
+  onChangeUser: () => void;
 }
 
 export function SettingsModal({
@@ -18,6 +19,7 @@ export function SettingsModal({
   onChangeTempUser2Name,
   onSave,
   onClose,
+  onChangeUser,
 }: SettingsModalProps) {
   return (
     <div className="fixed inset-0 bg-gray-50 z-50 flex flex-col animate-in fade-in zoom-in-95 duration-200">
@@ -63,6 +65,22 @@ export function SettingsModal({
               />
             </div>
           </div>
+        </div>
+
+        <div className="bg-white p-5 rounded-2xl shadow-sm border border-gray-100">
+          <h3 className="font-bold text-gray-800 mb-1 flex items-center gap-2">
+            <RefreshCw size={18} className="text-orange-500" /> 立場の変更
+          </h3>
+          <p className="text-xs text-gray-500 mb-4">
+            夫・妻の選択画面に戻ります。立場を間違えた場合はここから変更してください。
+          </p>
+          <button
+            type="button"
+            onClick={onChangeUser}
+            className="w-full bg-orange-50 hover:bg-orange-100 text-orange-600 border border-orange-200 font-bold py-3 rounded-xl transition-all"
+          >
+            立場を変更する
+          </button>
         </div>
 
         <button

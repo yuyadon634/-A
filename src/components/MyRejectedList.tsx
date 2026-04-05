@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { CornerDownLeft, MessageSquare, PenLine, ChevronDown, ScanLine } from 'lucide-react';
+import { CornerDownLeft, MessageSquare, PenLine, ChevronDown, ScanLine, Trash2 } from 'lucide-react';
 import { Transaction, User } from '@/types';
 import { getCategoryIcon } from '@/lib/utils';
 import { ReceiptItemAccordion } from './TransactionCard';
@@ -12,9 +12,10 @@ interface MyRejectedListProps {
   /** 現在表示中のユーザー。申請した本人のみに通知を表示するための防衛的フィルタ。 */
   currentUser: User;
   onEdit: (tx: Transaction) => void;
+  onDelete: (id: string) => void | Promise<void>;
 }
 
-export function MyRejectedList({ myRejectedTransactions, currentUser, onEdit }: MyRejectedListProps) {
+export function MyRejectedList({ myRejectedTransactions, currentUser, onEdit, onDelete }: MyRejectedListProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [receiptUrl, setReceiptUrl] = useState<string | null>(null);
 
@@ -126,13 +127,21 @@ export function MyRejectedList({ myRejectedTransactions, currentUser, onEdit }: 
                 </div>
               )}
 
-              {/* 再申請ボタン */}
-              <div className="px-4 pb-4">
+              {/* 再申請・削除 */}
+              <div className="px-4 pb-4 space-y-2">
                 <button
+                  type="button"
                   onClick={() => onEdit(tx)}
                   className="w-full bg-orange-500 hover:bg-orange-600 text-white py-2.5 rounded-xl text-sm font-bold flex items-center justify-center gap-2 shadow-sm shadow-orange-500/20 transition-colors"
                 >
                   <PenLine size={15} /> 内容を修正して再申請する
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onDelete(tx.id)}
+                  className="w-full bg-white hover:bg-gray-50 text-gray-600 border border-gray-200 py-2.5 rounded-xl text-sm font-semibold flex items-center justify-center gap-2 transition-colors"
+                >
+                  <Trash2 size={15} className="text-gray-500" /> この申請を削除
                 </button>
               </div>
             </div>
