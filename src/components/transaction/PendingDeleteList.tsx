@@ -2,7 +2,7 @@
 
 import { Check, X } from 'lucide-react';
 import { Transaction, User } from '@/types';
-import { getCategoryIcon } from '@/lib/utils';
+import { getCategoryIcon } from '@/lib/categoryUtils';
 
 interface PendingDeleteListProps {
   pendingDeleteTransactions: Transaction[];

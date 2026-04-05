@@ -3,9 +3,10 @@
 import { useState } from 'react';
 import { Clock, ChevronDown, MessageSquare, ScanLine } from 'lucide-react';
 import { Transaction } from '@/types';
-import { getCategoryIcon } from '@/lib/utils';
+import { getCategoryIcon } from '@/lib/categoryUtils';
 import { ReceiptItemAccordion } from './TransactionCard';
-import { ReceiptImageModal } from './ReceiptImageModal';
+import { ReceiptImageModal } from '@/components/modals/ReceiptImageModal';
+import { getDaysElapsed, getOverdueBadge } from '@/lib/dateUtils';
 
 interface MyPendingListProps {
   myPendingTransactions: Transaction[];
@@ -39,11 +40,13 @@ export function MyPendingList({ myPendingTransactions }: MyPendingListProps) {
           const hasDetails = !!(
             (tx.receiptItems && tx.receiptItems.length > 0) || tx.receiptImageUrl
           );
+          const daysElapsed = getDaysElapsed(tx.date);
+          const overdueBadge = getOverdueBadge(daysElapsed);
 
           return (
             <div
               key={tx.id}
-              className="bg-white rounded-xl border border-gray-100 shadow-sm overflow-hidden"
+              className={`bg-white rounded-xl border shadow-sm overflow-hidden ${overdueBadge ? 'border-amber-200' : 'border-gray-100'}`}
             >
               <div
                 className={`flex items-center justify-between p-4 ${hasDetails ? 'cursor-pointer' : ''}`}
@@ -73,6 +76,12 @@ export function MyPendingList({ myPendingTransactions }: MyPendingListProps) {
                       <Clock size={10} className="shrink-0" />
                       申請中
                     </span>
+                    {overdueBadge && (
+                      <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${overdueBadge.colorClass}`}>
+                        <Clock size={10} className="shrink-0" />
+                        相手が{daysElapsed}日未対応
+                      </span>
+                    )}
                     {hasDetails && (
                       <ChevronDown
                         size={14}
@@ -83,7 +92,6 @@ export function MyPendingList({ myPendingTransactions }: MyPendingListProps) {
                 </div>
               </div>
 
-              {/* ひとことメッセージ */}
               {tx.message && (
                 <div className="px-4 pb-3 flex items-start gap-2 relative pl-5">
                   <div className="absolute top-2.5 left-6 w-0 h-0 border-t-[6px] border-t-transparent border-r-[8px] border-r-gray-100 border-b-[6px] border-b-transparent" />
@@ -99,14 +107,12 @@ export function MyPendingList({ myPendingTransactions }: MyPendingListProps) {
                 </div>
               )}
 
-              {/* 明細・画像アコーディオン */}
               {isExpanded && hasDetails && (
                 <div className="px-4 pb-3">
                   <ReceiptItemAccordion tx={tx} />
                 </div>
               )}
 
-              {/* レシートを見るボタン */}
               {tx.receiptImageUrl && (
                 <div className="px-4 pb-4">
                   <button

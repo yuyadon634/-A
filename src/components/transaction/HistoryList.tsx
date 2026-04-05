@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { Transaction, User } from '@/types';
 import { TransactionCard } from './TransactionCard';
-import { ReceiptImageModal } from './ReceiptImageModal';
+import { ReceiptImageModal } from '@/components/modals/ReceiptImageModal';
 
 interface HistoryListProps {
   historyTransactions: Transaction[];

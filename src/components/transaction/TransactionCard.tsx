@@ -1,8 +1,10 @@
 'use client';
 
-import { Check, X, ChevronDown, MessageSquare, Trash2, Image as ImageIcon, ScanLine } from 'lucide-react';
+import { Check, X, ChevronDown, MessageSquare, Trash2, Image as ImageIcon, ScanLine, Clock } from 'lucide-react';
 import { Transaction, User } from '@/types';
-import { getCategoryIcon, getItemRequestedAmount } from '@/lib/utils';
+import { getCategoryIcon } from '@/lib/categoryUtils';
+import { getItemRequestedAmount } from '@/lib/transactionUtils';
+import { getDaysElapsed, getOverdueBadge } from '@/lib/dateUtils';
 
 interface BaseCardProps {
   tx: Transaction;
@@ -26,11 +28,7 @@ interface HistoryCardProps extends BaseCardProps {
 
 type TransactionCardProps = PendingCardProps | HistoryCardProps;
 
-export function ReceiptItemAccordion({
-  tx,
-}: {
-  tx: Transaction;
-}) {
+export function ReceiptItemAccordion({ tx }: { tx: Transaction }) {
   const hasItems = !!(tx.receiptItems && tx.receiptItems.length > 0);
   const hasImage = !!tx.receiptImageUrl;
 
@@ -38,7 +36,6 @@ export function ReceiptItemAccordion({
 
   return (
     <div className="mt-3 pt-3 border-t border-gray-100 text-sm animate-in slide-in-from-top-2 space-y-3">
-      {/* レシート画像（両者が確認できる） */}
       {hasImage && (
         <div className="rounded-xl overflow-hidden border border-gray-100">
           <div className="px-3 py-2 bg-gray-50 border-b border-gray-100 flex items-center gap-1.5">
@@ -55,7 +52,6 @@ export function ReceiptItemAccordion({
         </div>
       )}
 
-      {/* 明細内訳 */}
       {hasItems && (
         <div>
           <p className="font-bold text-gray-700 mb-2">明細内訳</p>
@@ -106,18 +102,26 @@ export function TransactionCard(props: TransactionCardProps) {
 
   if (props.variant === 'pending') {
     const { onApprove, onReject } = props;
+    const daysElapsed = getDaysElapsed(tx.date);
+    const overdueBadge = getOverdueBadge(daysElapsed);
     return (
-      <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+      <div className={`bg-white p-4 rounded-xl shadow-sm border ${overdueBadge ? 'border-amber-200' : 'border-gray-100'}`}>
         <div
           className="flex justify-between items-start mb-3"
           onClick={() => onToggleExpand(tx.id)}
         >
           <div>
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex items-center gap-2 mb-2 flex-wrap">
               <span className="bg-orange-100 text-orange-700 text-[10px] font-bold px-2 py-0.5 rounded-sm">
                 申請者: {getDisplayName(tx.paidBy)}
               </span>
               <span className="text-xs text-gray-500">{tx.date}</span>
+              {overdueBadge && (
+                <span className={`inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full border ${overdueBadge.colorClass}`}>
+                  <Clock size={10} className="shrink-0" />
+                  {overdueBadge.label}
+                </span>
+              )}
             </div>
             <div className="flex items-center gap-1.5 text-gray-700">
               <div className="bg-gray-100 p-1 rounded text-gray-500">

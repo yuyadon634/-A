@@ -3,13 +3,12 @@
 import { useState } from 'react';
 import { CornerDownLeft, MessageSquare, PenLine, ChevronDown, ScanLine, Trash2 } from 'lucide-react';
 import { Transaction, User } from '@/types';
-import { getCategoryIcon } from '@/lib/utils';
+import { getCategoryIcon } from '@/lib/categoryUtils';
 import { ReceiptItemAccordion } from './TransactionCard';
-import { ReceiptImageModal } from './ReceiptImageModal';
+import { ReceiptImageModal } from '@/components/modals/ReceiptImageModal';
 
 interface MyRejectedListProps {
   myRejectedTransactions: Transaction[];
-  /** 現在表示中のユーザー。申請した本人のみに通知を表示するための防衛的フィルタ。 */
   currentUser: User;
   onEdit: (tx: Transaction) => void;
   onDelete: (id: string) => void | Promise<void>;
@@ -19,8 +18,6 @@ export function MyRejectedList({ myRejectedTransactions, currentUser, onEdit, on
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [receiptUrl, setReceiptUrl] = useState<string | null>(null);
 
-  // 申請した本人 (paidBy === currentUser) の差し戻し申請のみ表示する。
-  // useTransactions 側でも同様のフィルタを行っているが、防衛的に二重チェックする。
   const ownRejected = myRejectedTransactions.filter(tx => tx.paidBy === currentUser);
 
   if (ownRejected.length === 0) return null;
@@ -31,7 +28,6 @@ export function MyRejectedList({ myRejectedTransactions, currentUser, onEdit, on
 
   return (
     <section>
-      {/* 通知バナー */}
       <div className="bg-orange-500 rounded-2xl px-4 py-3 mb-3 flex items-center gap-3 shadow-md shadow-orange-500/20">
         <div className="w-8 h-8 bg-white/20 rounded-full flex items-center justify-center shrink-0">
           <CornerDownLeft size={16} className="text-white" />
@@ -59,7 +55,6 @@ export function MyRejectedList({ myRejectedTransactions, currentUser, onEdit, on
               key={tx.id}
               className="bg-white rounded-xl border border-orange-200 shadow-sm overflow-hidden"
             >
-              {/* カードヘッダー（タップで明細/画像展開） */}
               <div
                 className={`flex justify-between items-start p-4 pb-3 ${hasDetails ? 'cursor-pointer' : ''}`}
                 onClick={() => hasDetails && toggleExpand(tx.id)}
@@ -88,7 +83,6 @@ export function MyRejectedList({ myRejectedTransactions, currentUser, onEdit, on
                 </div>
               </div>
 
-              {/* 差戻しコメント */}
               <div className="px-4 pb-3">
                 {tx.rejectMessage ? (
                   <div className="flex items-start gap-2 relative pl-1">
@@ -108,14 +102,12 @@ export function MyRejectedList({ myRejectedTransactions, currentUser, onEdit, on
                 )}
               </div>
 
-              {/* 明細・画像アコーディオン */}
               {isExpanded && hasDetails && (
                 <div className="px-4 pb-3">
                   <ReceiptItemAccordion tx={tx} />
                 </div>
               )}
 
-              {/* レシートを見るボタン */}
               {tx.receiptImageUrl && (
                 <div className="px-4 pb-2">
                   <button
@@ -127,7 +119,6 @@ export function MyRejectedList({ myRejectedTransactions, currentUser, onEdit, on
                 </div>
               )}
 
-              {/* 再申請・削除 */}
               <div className="px-4 pb-4 space-y-2">
                 <button
                   type="button"

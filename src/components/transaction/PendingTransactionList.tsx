@@ -3,8 +3,8 @@
 import { useState } from 'react';
 import { Transaction, User } from '@/types';
 import { TransactionCard } from './TransactionCard';
-import { RejectCommentModal } from './RejectCommentModal';
-import { ReceiptImageModal } from './ReceiptImageModal';
+import { RejectCommentModal } from '@/components/modals/RejectCommentModal';
+import { ReceiptImageModal } from '@/components/modals/ReceiptImageModal';
 
 interface PendingTransactionListProps {
   pendingTransactions: Transaction[];

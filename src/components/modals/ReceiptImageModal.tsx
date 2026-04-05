@@ -15,7 +15,6 @@ export function ReceiptImageModal({ imageUrl, onClose }: ReceiptImageModalProps)
   const lastTapRef = useRef<number>(0);
   const imgRef = useRef<HTMLImageElement>(null);
 
-  // Escキーで閉じる
   useEffect(() => {
     const handleKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -24,7 +23,6 @@ export function ReceiptImageModal({ imageUrl, onClose }: ReceiptImageModalProps)
     return () => window.removeEventListener('keydown', handleKey);
   }, [onClose]);
 
-  // スクロール固定
   useEffect(() => {
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = ''; };
@@ -64,7 +62,6 @@ export function ReceiptImageModal({ imageUrl, onClose }: ReceiptImageModalProps)
       lastDistanceRef.current = null;
     }
 
-    // ダブルタップ検出
     if (e.changedTouches.length === 1) {
       const now = Date.now();
       if (now - lastTapRef.current < 300) {
@@ -79,7 +76,6 @@ export function ReceiptImageModal({ imageUrl, onClose }: ReceiptImageModalProps)
       className="fixed inset-0 z-[200] bg-black flex flex-col"
       style={{ touchAction: 'none' }}
     >
-      {/* ヘッダー */}
       <div className="flex items-center justify-between px-4 py-3 shrink-0">
         <div className="flex items-center gap-2 text-white/60 text-xs">
           <ZoomIn size={14} />
@@ -93,7 +89,6 @@ export function ReceiptImageModal({ imageUrl, onClose }: ReceiptImageModalProps)
         </button>
       </div>
 
-      {/* 画像エリア */}
       <div
         className="flex-1 flex items-center justify-center overflow-hidden"
         onTouchStart={handleTouchStart}
@@ -118,7 +113,6 @@ export function ReceiptImageModal({ imageUrl, onClose }: ReceiptImageModalProps)
         />
       </div>
 
-      {/* スケールインジケーター（1倍以外のとき） */}
       {scale > 1.05 && (
         <div className="absolute bottom-6 left-0 right-0 flex justify-center pointer-events-none">
           <span className="bg-white/20 text-white text-xs px-3 py-1.5 rounded-full backdrop-blur-sm">

@@ -1,7 +1,7 @@
 'use client';
 
 import { Users, ArrowRight, CheckCircle2, Settings } from 'lucide-react';
-import { BalanceInfo } from '@/hooks/useTransactions';
+import { BalanceInfo } from '@/types';
 
 interface HeaderProps {
   currentDisplayName: string;

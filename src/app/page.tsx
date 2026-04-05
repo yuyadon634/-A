@@ -5,17 +5,19 @@ import { Plus, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import { User, Transaction } from '@/types';
 import { useUserSettings } from '@/hooks/useUserSettings';
 import { useTransactions } from '@/hooks/useTransactions';
-import { Header } from '@/components/Header';
-import { SettlementRequestCard } from '@/components/SettlementRequestCard';
-import { PendingTransactionList } from '@/components/PendingTransactionList';
-import { PendingDeleteList } from '@/components/PendingDeleteList';
-import { HistoryList } from '@/components/HistoryList';
-import { CompletedHistory } from '@/components/CompletedHistory';
-import { MyRejectedList } from '@/components/MyRejectedList';
-import { MyPendingList } from '@/components/MyPendingList';
-import { AddTransactionModal } from '@/components/AddTransactionModal';
-import { SettingsModal } from '@/components/SettingsModal';
-import { UserSelectScreen } from '@/components/UserSelectScreen';
+import { Header } from '@/components/layout/Header';
+import { SettlementRequestCard } from '@/components/settlement/SettlementRequestCard';
+import { PendingTransactionList } from '@/components/transaction/PendingTransactionList';
+import { PendingDeleteList } from '@/components/transaction/PendingDeleteList';
+import { HistoryList } from '@/components/transaction/HistoryList';
+import { CompletedHistory } from '@/components/transaction/CompletedHistory';
+import { MyRejectedList } from '@/components/transaction/MyRejectedList';
+import { MyPendingList } from '@/components/transaction/MyPendingList';
+import { AddTransactionModal } from '@/components/modals/AddTransactionModal';
+import { SettingsModal } from '@/components/modals/SettingsModal';
+import { UserSelectScreen } from '@/components/screens/UserSelectScreen';
+import { Toast } from '@/components/ui/Toast';
+import { useBadge } from '@/hooks/useBadge';
 
 const STORAGE_KEY_USER = 'selectedUser';
 
@@ -30,6 +32,15 @@ export default function Home() {
 
   const settings = useUserSettings();
   const tx = useTransactions(currentUser, settings.user1Name, settings.user2Name);
+
+  // 承認待ち・精算リクエスト・削除リクエストのいずれかがあればアイコンにバッジを表示する
+  // isUserSelected が true のときのみカウントし、未ログイン時はバッジをクリアする
+  const hasPendingItems =
+    isUserSelected === true &&
+    (tx.pendingTransactions.length > 0 ||
+      tx.pendingSettlementRequests.length > 0 ||
+      tx.pendingDeleteTransactions.length > 0);
+  useBadge(hasPendingItems);
 
   useEffect(() => {
     // マウント後にlocalStorageを読み込む（SSRと一致させるためuseEffect内で行う）
@@ -93,6 +104,13 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-gray-50 text-gray-900 font-sans pb-24 selection:bg-blue-100 relative">
+      {tx.toast && (
+        <Toast
+          message={tx.toast.message}
+          type={tx.toast.type}
+          onClose={tx.clearToast}
+        />
+      )}
       {tx.isLoading && tx.transactions.length === 0 && (
         <div className="absolute inset-0 bg-white/80 z-40 flex items-center justify-center backdrop-blur-sm">
           <Loader2 size={40} className="text-blue-600 animate-spin" />

@@ -1,52 +1,104 @@
-import { useState, useRef } from 'react';
+/**
+ * アプリのトランザクションデータを一元管理するカスタムフック（オーケストレーター）。
+ *
+ * 責務：
+ *  - transactions / isLoading / fetchError の state 管理
+ *  - Supabase からのデータ取得 (fetchTransactions / addTransaction)
+ *  - Supabase Realtime によるリアルタイム同期とトースト通知
+ *  - transactionSelectors で算出した派生データの公開
+ *  - useTransactionMutations で実装した書き込み操作の公開
+ */
+import { useState, useEffect, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
-import { Transaction, User, SplitType, Status, ReceiptItem } from '@/types';
+import { Transaction, User, BalanceInfo } from '@/types';
+import { mapDbRowToTransaction } from '@/lib/db/transactionMapper';
+import {
+  getPendingTransactions,
+  getHistoryTransactions,
+  getCompletedTransactions,
+  getPendingDeleteTransactions,
+  getPendingSettlementRequests,
+  getMyPendingTransactions,
+  getMyRejectedTransactions,
+  getSettleableTransactions,
+  getIsWaitingForSettlementApproval,
+  // エイリアスが必要な理由: このフックが返す calcBalance 関数と名前が衝突するため
+  calcBalance as calcBalanceFn,
+} from '@/lib/transactionSelectors';
+import { useTransactionMutations } from '@/hooks/useTransactionMutations';
+import type { ToastType } from '@/components/ui/Toast';
 
-export type ResubmitData = {
-  amount: number;
-  category: string;
-  splitType: SplitType;
-  requestedAmount: number;
-  receiptItems: ReceiptItem[];
-  receiptImageUrl?: string;
-  message: string;
+// ---------- リアルタイム通知 ----------
+
+type RealtimePayload = {
+  eventType: 'INSERT' | 'UPDATE' | 'DELETE';
+  new: Record<string, unknown>;
+  old: Record<string, unknown>;
 };
 
-export type BalanceInfo =
-  | { text: string; amount: 0; from: null; to: null }
-  | { amount: number; from: string; to: string; text?: undefined };
+/**
+ * Realtime ペイロードを解析し、表示すべき通知メッセージを返す。
+ *
+ * 自分が起こした操作（自分の申請の INSERT など）は null を返して通知しない。
+ * paid_by / settlement_requested_by / delete_requested_by を使って判定するため、
+ * Supabase の REPLICA IDENTITY 設定に依存せず new 行だけで判断できる。
+ */
+function deriveNotification(
+  payload: RealtimePayload,
+  currentUser: User,
+): { message: string; type: ToastType } | null {
+  const { eventType, new: newRow } = payload;
 
-// --- ランタイム型ガード ---
-// DB から返る値が想定外の場合に console.warn でログを残し、安全なフォールバックを返す
+  if (eventType === 'INSERT') {
+    // 相手が新しい申請を送ってきた（自分の申請は paid_by === currentUser で除外）
+    if (newRow.paid_by !== currentUser) {
+      return { message: '新しい立替申請が届きました', type: 'info' };
+    }
+    return null;
+  }
 
-function assertUser(v: unknown, field: string): User {
-  if (v === '夫' || v === '妻') return v;
-  console.warn(`[DB] Unexpected ${field}: ${String(v)}`);
-  return '夫';
+  if (eventType === 'UPDATE') {
+    // 自分の申請が承認された
+    if (newRow.status === 'approved' && newRow.paid_by === currentUser) {
+      return { message: '申請が承認されました！', type: 'success' };
+    }
+    // 自分の申請が差し戻された
+    if (newRow.status === 'rejected' && newRow.paid_by === currentUser) {
+      return { message: '申請が差し戻されました', type: 'warning' };
+    }
+    // 相手から精算リクエストが届いた（自分がリクエストした場合は除外）
+    if (
+      newRow.settlement_status === 'requested' &&
+      newRow.settlement_requested_by !== currentUser
+    ) {
+      return { message: '精算リクエストが届きました', type: 'info' };
+    }
+    // 自分の精算リクエストが承認された
+    if (
+      newRow.settlement_status === 'completed' &&
+      newRow.settlement_requested_by === currentUser
+    ) {
+      return { message: '精算リクエストが承認されました！', type: 'success' };
+    }
+    // 相手から削除リクエストが届いた
+    if (
+      newRow.delete_status === 'requested' &&
+      newRow.delete_requested_by !== currentUser
+    ) {
+      return { message: '削除リクエストが届きました', type: 'info' };
+    }
+  }
+
+  return null;
 }
 
-function assertStatus(v: unknown): Status {
-  if (v === 'pending' || v === 'approved' || v === 'rejected') return v;
-  console.warn(`[DB] Unexpected status: ${String(v)}`);
-  return 'pending';
-}
+// ---------- ローカルヘルパー ----------
 
-function assertSplitType(v: unknown): SplitType {
-  if (['none', 'split', 'full', 'amount', 'percentage'].includes(v as string))
-    return v as SplitType;
-  console.warn(`[DB] Unexpected splitType: ${String(v)}`);
-  return 'none';
-}
+/** 日付の降順（新しい順）でトランザクションを並べ替えるヘルパー */
+const sortByDateDesc = (list: Transaction[]): Transaction[] =>
+  list.sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 
-function assertDeleteStatus(v: unknown): 'none' | 'requested' {
-  if (v === 'none' || v === 'requested') return v;
-  return 'none';
-}
-
-function assertSettlementStatus(v: unknown): 'none' | 'requested' | 'completed' {
-  if (v === 'none' || v === 'requested' || v === 'completed') return v;
-  return 'none';
-}
+// ---------- フック本体 ----------
 
 export function useTransactions(
   currentUser: User,
@@ -56,23 +108,9 @@ export function useTransactions(
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [fetchError, setFetchError] = useState<string | null>(null);
+  const [toast, setToast] = useState<{ message: string; type: ToastType } | null>(null);
 
-  // ① 二重実行防止: 処理中のアクションキーを追跡
-  const processingIdsRef = useRef(new Set<string>());
-
-  /**
-   * 同一キーのアクションが既に実行中なら即座にスキップ。
-   * これにより連続タップ・ダブルタップによる重複リクエストを防ぐ。
-   */
-  const withDedup = async (key: string, action: () => Promise<void>) => {
-    if (processingIdsRef.current.has(key)) return;
-    processingIdsRef.current.add(key);
-    try {
-      await action();
-    } finally {
-      processingIdsRef.current.delete(key);
-    }
-  };
+  // ---------- データ取得 ----------
 
   const fetchTransactions = async () => {
     setFetchError(null);
@@ -90,30 +128,7 @@ export function useTransactions(
       }
 
       if (data) {
-        // ② DB の値を型ガードで安全にマッピング
-        const formattedData: Transaction[] = data.map(item => ({
-          id: item.id.toString(),
-          date: item.date,
-          amount: item.amount,
-          paidBy: assertUser(item.paid_by, 'paidBy'),
-          requestedAmount: item.requested_amount,
-          splitType: assertSplitType(item.split_type),
-          status: assertStatus(item.status),
-          category: typeof item.category === 'string' ? item.category : '',
-          deleteStatus: assertDeleteStatus(item.delete_status),
-          deleteRequestedBy: item.delete_requested_by != null
-            ? assertUser(item.delete_requested_by, 'deleteRequestedBy')
-            : undefined,
-          settlementStatus: assertSettlementStatus(item.settlement_status),
-          settlementRequestedBy: item.settlement_requested_by != null
-            ? assertUser(item.settlement_requested_by, 'settlementRequestedBy')
-            : undefined,
-          receiptItems: Array.isArray(item.receipt_items) ? item.receipt_items : [],
-          receiptImageUrl: item.receipt_image_url || undefined,
-          message: item.message || undefined,
-          rejectMessage: item.reject_message || undefined,
-        }));
-        setTransactions(formattedData);
+        setTransactions(data.map(mapDbRowToTransaction));
       }
     } catch (err) {
       console.error('Unexpected error:', err);
@@ -123,305 +138,100 @@ export function useTransactions(
     }
   };
 
-  // --- Computed values ---
-
-  const pendingTransactions = transactions.filter(
-    tx => tx.status === 'pending' && tx.paidBy !== currentUser,
-  );
-
-  const historyTransactions = transactions
-    .filter(
-      tx =>
-        tx.status === 'approved' &&
-        tx.deleteStatus !== 'requested' &&
-        tx.settlementStatus !== 'completed',
-    )
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-  const completedTransactions = transactions
-    .filter(tx => tx.settlementStatus === 'completed')
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-  const pendingDeleteTransactions = transactions.filter(
-    tx => tx.deleteStatus === 'requested' && tx.deleteRequestedBy !== currentUser,
-  );
-
-  const pendingSettlementRequests = transactions.filter(
-    tx => tx.settlementStatus === 'requested' && tx.settlementRequestedBy !== currentUser,
-  );
-
-  const myPendingTransactions = transactions
-    .filter(tx => tx.status === 'pending' && tx.paidBy === currentUser)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-  const myRejectedTransactions = transactions
-    .filter(tx => tx.status === 'rejected' && tx.paidBy === currentUser)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-
-  const settleableTransactions = transactions.filter(
-    tx =>
-      tx.status === 'approved' &&
-      tx.settlementStatus === 'none' &&
-      tx.deleteStatus !== 'requested',
-  );
-
-  const isWaitingForSettlementApproval = transactions.some(
-    tx => tx.settlementStatus === 'requested' && tx.settlementRequestedBy === currentUser,
-  );
-
-  const calcBalance = (): BalanceInfo => {
-    let balance = 0;
-    transactions.forEach(tx => {
-      if (tx.status !== 'approved') return;
-      if (tx.deleteStatus === 'requested') return;
-      if (tx.settlementStatus !== 'none') return;
-      if (tx.paidBy === '夫') balance += tx.requestedAmount;
-      else balance -= tx.requestedAmount;
-    });
-
-    if (balance === 0) return { text: '精算なし（0円）', amount: 0, from: null, to: null };
-    if (balance > 0) return { amount: balance, from: user2Name, to: user1Name };
-    return { amount: Math.abs(balance), from: user1Name, to: user2Name };
+  /**
+   * Realtime イベント用のバックグラウンド再取得。
+   * isLoading を操作しないため、画面上にローディングスピナーが出ない。
+   */
+  const silentFetch = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('transactions')
+        .select('*')
+        .order('date', { ascending: false });
+      if (!error && data) {
+        setTransactions(data.map(mapDbRowToTransaction));
+      }
+    } catch {
+      // バックグラウンド更新の失敗はサイレントに無視する
+    }
   };
 
-  // --- Actions (全て withDedup でラップ) ---
-
+  /** 新規申請をサーバー往復なしで即時リストに追加する（楽観的更新） */
   const addTransaction = (newTx: Transaction) => {
     setTransactions(prev => [newTx, ...prev]);
   };
 
-  const handleResubmit = (id: string, data: ResubmitData) =>
-    withDedup(`resubmit-${id}`, async () => {
-      // null 値のオプションカラムは含めない（DBにカラムがない場合でも動くよう防衛的に構築）
-      const updatePayload: Record<string, unknown> = {
-        amount: data.amount,
-        category: data.category,
-        split_type: data.splitType,
-        requested_amount: data.requestedAmount,
-        receipt_items: data.receiptItems,
-        message: data.message || null,
-        status: 'pending',
-      };
-      if (data.receiptImageUrl) updatePayload.receipt_image_url = data.receiptImageUrl;
+  // ---------- Realtime サブスクリプション ----------
 
-      const { error } = await supabase
-        .from('transactions')
-        .update(updatePayload)
-        .eq('id', id);
+  /**
+   * silentFetch はレンダリングごとに再生成されるため、
+   * Ref に格納して useEffect の依存配列から外す（stale closure を防ぐ）。
+   */
+  const silentFetchRef = useRef(silentFetch);
+  silentFetchRef.current = silentFetch;
 
-      if (error) throw error;
+  useEffect(() => {
+    const channel = supabase
+      .channel('realtime-transactions')
+      .on(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        'postgres_changes' as any,
+        { event: '*', schema: 'public', table: 'transactions' },
+        (payload: RealtimePayload) => {
+          // バックグラウンドでデータを最新化する
+          silentFetchRef.current();
 
-      setTransactions(prev =>
-        prev.map(tx =>
-          tx.id === id
-            ? {
-                ...tx,
-                amount: data.amount,
-                category: data.category,
-                splitType: data.splitType,
-                requestedAmount: data.requestedAmount,
-                  receiptItems: data.receiptItems,
-                  receiptImageUrl: data.receiptImageUrl || undefined,
-                  message: data.message || undefined,
-                  status: 'pending',
-                  rejectMessage: undefined,
-              }
-            : tx,
-        ),
-      );
-    }).catch(err => {
-      console.error('Error resubmitting transaction:', err);
-      alert('再申請に失敗しました');
-    });
-
-  const handleApprove = (id: string) =>
-    withDedup(`approve-${id}`, async () => {
-      const { error } = await supabase
-        .from('transactions')
-        .update({ status: 'approved' })
-        .eq('id', id);
-      if (error) throw error;
-      setTransactions(prev =>
-        prev.map(tx => (tx.id === id ? { ...tx, status: 'approved' } : tx)),
-      );
-    }).catch(err => {
-      console.error('Error approving transaction:', err);
-      alert('承認処理に失敗しました');
-    });
-
-  const handleReject = (id: string, rejectMessage: string) =>
-    withDedup(`reject-${id}`, async () => {
-      // reject_message カラムが存在しない場合でも status 更新だけは成功するよう分離
-      const rejectPayload: Record<string, unknown> = { status: 'rejected' };
-      if (rejectMessage) rejectPayload.reject_message = rejectMessage;
-
-      const { error } = await supabase
-        .from('transactions')
-        .update(rejectPayload)
-        .eq('id', id);
-      if (error) throw error;
-      setTransactions(prev =>
-        prev.map(tx =>
-          tx.id === id
-            ? { ...tx, status: 'rejected', rejectMessage: rejectMessage || undefined }
-            : tx,
-        ),
-      );
-    }).catch(err => {
-      console.error('Error rejecting transaction:', err);
-      alert('差戻し処理に失敗しました');
-    });
-
-  const requestDelete = (id: string) =>
-    withDedup(`delete-req-${id}`, async () => {
-      if (!confirm('このデータを削除申請しますか？（相手が同意すると完全に削除されます）')) return;
-      const { error } = await supabase
-        .from('transactions')
-        .update({ delete_status: 'requested', delete_requested_by: currentUser })
-        .eq('id', id);
-      if (error) throw error;
-      setTransactions(prev =>
-        prev.map(tx =>
-          tx.id === id
-            ? { ...tx, deleteStatus: 'requested', deleteRequestedBy: currentUser }
-            : tx,
-        ),
-      );
-      alert('削除を申請しました。相手の同意を待ちます。');
-    }).catch(err => {
-      console.error('Error requesting delete:', err);
-      alert('削除申請に失敗しました');
-    });
-
-  const approveDelete = (id: string) =>
-    withDedup(`delete-approve-${id}`, async () => {
-      const { error } = await supabase.from('transactions').delete().eq('id', id);
-      if (error) throw error;
-      setTransactions(prev => prev.filter(tx => tx.id !== id));
-      alert('データを削除しました');
-    }).catch(err => {
-      console.error('Error approving delete:', err);
-      alert('削除処理に失敗しました');
-    });
-
-  const rejectDelete = (id: string) =>
-    withDedup(`delete-reject-${id}`, async () => {
-      const { error } = await supabase
-        .from('transactions')
-        .update({ delete_status: 'none', delete_requested_by: null })
-        .eq('id', id);
-      if (error) throw error;
-      setTransactions(prev =>
-        prev.map(tx =>
-          tx.id === id ? { ...tx, deleteStatus: 'none', deleteRequestedBy: undefined } : tx,
-        ),
-      );
-    }).catch(err => {
-      console.error('Error rejecting delete:', err);
-      alert('拒否処理に失敗しました');
-    });
-
-  /** 差戻し中かつ自分が申請した取引のみ削除（相手の承認不要） */
-  const deleteRejectedTransaction = async (id: string): Promise<boolean> => {
-    const target = transactions.find(
-      t => t.id === id && t.status === 'rejected' && t.paidBy === currentUser,
-    );
-    if (!target) return false;
-    if (!confirm('この差戻しされた申請を削除しますか？取り消せません。')) return false;
-
-    const key = `delete-rejected-${id}`;
-    if (processingIdsRef.current.has(key)) return false;
-    processingIdsRef.current.add(key);
-    try {
-      const { error } = await supabase.from('transactions').delete().eq('id', id);
-      if (error) throw error;
-      setTransactions(prev => prev.filter(tx => tx.id !== id));
-      return true;
-    } catch (err) {
-      console.error('Error deleting rejected transaction:', err);
-      alert('削除に失敗しました');
-      return false;
-    } finally {
-      processingIdsRef.current.delete(key);
-    }
-  };
-
-  const requestSettlement = () =>
-    withDedup('settlement-request', async () => {
-      if (
-        !confirm(
-          '現在の差額を現金等で精算し、アプリの計算をリセット（チャラ）する申請をしますか？',
-        )
+          // 相手の操作だった場合のみトースト通知を表示する
+          const notification = deriveNotification(payload, currentUser);
+          if (notification) setToast(notification);
+        },
       )
-        return;
-      const settleableIds = settleableTransactions.map(tx => tx.id);
-      if (settleableIds.length === 0) return;
-      const { error } = await supabase
-        .from('transactions')
-        .update({ settlement_status: 'requested', settlement_requested_by: currentUser })
-        .in('id', settleableIds);
-      if (error) throw error;
-      setTransactions(prev =>
-        prev.map(tx =>
-          settleableIds.includes(tx.id)
-            ? { ...tx, settlementStatus: 'requested', settlementRequestedBy: currentUser }
-            : tx,
-        ),
-      );
-      alert('精算リセットを申請しました。相手の同意を待ちます。');
-    }).catch(err => {
-      console.error('Error requesting settlement:', err);
-      alert('申請に失敗しました');
-    });
+      .subscribe();
 
-  const approveSettlement = () =>
-    withDedup('settlement-approve', async () => {
-      const requestedIds = pendingSettlementRequests.map(tx => tx.id);
-      if (requestedIds.length === 0) return;
-      const { error } = await supabase
-        .from('transactions')
-        .update({ settlement_status: 'completed' })
-        .in('id', requestedIds);
-      if (error) throw error;
-      setTransactions(prev =>
-        prev.map(tx =>
-          requestedIds.includes(tx.id) ? { ...tx, settlementStatus: 'completed' } : tx,
-        ),
-      );
-      alert('精算リセットに同意しました。該当の履歴はアーカイブされました。');
-    }).catch(err => {
-      console.error('Error approving settlement:', err);
-      alert('エラーが発生しました');
-    });
+    // コンポーネントのアンマウント時またはユーザー切り替え時にチャンネルを解放する
+    return () => { supabase.removeChannel(channel); };
+  }, [currentUser]);
 
-  const rejectSettlement = () =>
-    withDedup('settlement-reject', async () => {
-      const requestedIds = pendingSettlementRequests.map(tx => tx.id);
-      if (requestedIds.length === 0) return;
-      const { error } = await supabase
-        .from('transactions')
-        .update({ settlement_status: 'none', settlement_requested_by: null })
-        .in('id', requestedIds);
-      if (error) throw error;
-      setTransactions(prev =>
-        prev.map(tx =>
-          requestedIds.includes(tx.id)
-            ? { ...tx, settlementStatus: 'none', settlementRequestedBy: undefined }
-            : tx,
-        ),
-      );
-    }).catch(err => {
-      console.error('Error rejecting settlement:', err);
-      alert('エラーが発生しました');
-    });
+  const clearToast = () => setToast(null);
+
+  // ---------- ミューテーション ----------
+
+  const mutations = useTransactionMutations(transactions, setTransactions, currentUser);
+
+  // ---------- 派生データ ----------
+
+  // currentUser が '夫' なら user1Name、'妻' なら user2Name に対応
+  const currentDisplayName = currentUser === '夫' ? user1Name : user2Name;
+  const otherDisplayName = currentUser === '夫' ? user2Name : user1Name;
+
+  const pendingTransactions = getPendingTransactions(transactions, currentUser);
+  const historyTransactions = sortByDateDesc(getHistoryTransactions(transactions));
+  const completedTransactions = sortByDateDesc(getCompletedTransactions(transactions));
+  const pendingDeleteTransactions = getPendingDeleteTransactions(transactions, currentUser);
+  const pendingSettlementRequests = getPendingSettlementRequests(transactions, currentUser);
+  const myPendingTransactions = sortByDateDesc(getMyPendingTransactions(transactions, currentUser));
+  const myRejectedTransactions = sortByDateDesc(getMyRejectedTransactions(transactions, currentUser));
+  const settleableTransactions = getSettleableTransactions(transactions);
+  const isWaitingForSettlementApproval = getIsWaitingForSettlementApproval(
+    transactions,
+    currentUser,
+  );
+
+  const calcBalance = (): BalanceInfo =>
+    calcBalanceFn(transactions, currentUser, currentDisplayName, otherDisplayName);
 
   return {
+    // state
     transactions,
     isLoading,
     fetchError,
+    // toast
+    toast,
+    clearToast,
+    // fetch
     fetchTransactions,
     addTransaction,
-    handleResubmit,
+    // derived
     pendingTransactions,
     myPendingTransactions,
     historyTransactions,
@@ -432,14 +242,7 @@ export function useTransactions(
     settleableTransactions,
     isWaitingForSettlementApproval,
     calcBalance,
-    handleApprove,
-    handleReject,
-    requestDelete,
-    approveDelete,
-    rejectDelete,
-    deleteRejectedTransaction,
-    requestSettlement,
-    approveSettlement,
-    rejectSettlement,
+    // mutations
+    ...mutations,
   };
 }

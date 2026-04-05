@@ -6,19 +6,16 @@ import {
   ChevronLeft,
   Loader2,
   CheckCircle2,
-  Circle,
   Image as ImageIcon,
   Paperclip,
   MessageSquare,
-  Trash2,
-  Layers,
   ScanLine,
 } from 'lucide-react';
 import { useState } from 'react';
-import { ReceiptItem, SplitType, Transaction, User } from '@/types';
-import { getItemRequestedAmount } from '@/lib/utils';
+import { SplitType, Transaction, User, ResubmitData } from '@/types';
 import { useTransactionForm } from '@/hooks/useTransactionForm';
-import { ResubmitData } from '@/hooks/useTransactions';
+import { ReceiptItemRow } from '@/components/transaction/ReceiptItemRow';
+import { BulkSplitSetter } from '@/components/transaction/BulkSplitSetter';
 import { ReceiptImageModal } from './ReceiptImageModal';
 
 interface AddTransactionModalProps {
@@ -28,208 +25,6 @@ interface AddTransactionModalProps {
   onClose: () => void;
   editTransaction?: Transaction;
   onResubmit?: (id: string, data: ResubmitData) => Promise<void>;
-}
-
-function ReceiptItemRow({
-  item,
-  onToggleSelection,
-  onUpdateSplit,
-  onUpdateCustomValue,
-  onUpdateDetail,
-  onDelete,
-}: {
-  item: ReceiptItem;
-  onToggleSelection: (id: string) => void;
-  onUpdateSplit: (id: string, splitType: SplitType) => void;
-  onUpdateCustomValue: (id: string, val: string) => void;
-  onUpdateDetail: (id: string, field: 'name' | 'price', val: string) => void;
-  onDelete: (id: string) => void;
-}) {
-  return (
-    <div
-      className={`flex flex-col p-4 transition-colors ${item.selected ? 'bg-white' : 'bg-gray-50/50'}`}
-    >
-      <div className="flex items-start justify-between">
-        <div className="flex items-start gap-3 w-full pr-4">
-          <button
-            type="button"
-            onClick={() => onToggleSelection(item.id)}
-            className="text-blue-600 focus:outline-none mt-1 shrink-0"
-          >
-            {item.selected ? (
-              <CheckCircle2 size={24} className="fill-blue-600 text-white" />
-            ) : (
-              <Circle size={24} className="text-gray-300" />
-            )}
-          </button>
-          <div className="w-full">
-            <input
-              type="text"
-              value={item.name}
-              onChange={e => onUpdateDetail(item.id, 'name', e.target.value)}
-              placeholder="品名"
-              className={`w-full text-sm font-medium bg-transparent border-b border-transparent focus:border-gray-300 outline-none pb-0.5
-                ${item.selected ? 'text-gray-900' : 'text-gray-400 line-through'}`}
-            />
-          </div>
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          <span className="text-sm font-bold text-gray-400">¥</span>
-          <input
-            type="number"
-            value={item.price || ''}
-            onChange={e => onUpdateDetail(item.id, 'price', e.target.value)}
-            placeholder="0"
-            className={`w-16 text-right font-bold bg-transparent border-b border-transparent focus:border-gray-300 outline-none pb-0.5
-              ${item.selected ? 'text-gray-900' : 'text-gray-400'}`}
-          />
-        </div>
-      </div>
-
-      {item.selected && (
-        <div className="mt-4 pl-9 space-y-3 animate-in slide-in-from-top-2 duration-200">
-          <div className="flex bg-gray-100 p-1 rounded-lg">
-            {(['none', 'split', 'full', 'amount', 'percentage'] as SplitType[]).map(type => {
-              const labels: Record<SplitType, string> = {
-                none: '未設定',
-                split: '割り勘',
-                full: '全額',
-                amount: '金額',
-                percentage: '割合',
-              };
-              return (
-                <button
-                  key={type}
-                  onClick={() => onUpdateSplit(item.id, type)}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${
-                    item.splitType === type
-                      ? type === 'none'
-                        ? 'bg-white text-gray-700 shadow-sm'
-                        : 'bg-white text-blue-700 shadow-sm'
-                      : 'text-gray-500 hover:text-gray-700'
-                  }`}
-                >
-                  {labels[type]}
-                </button>
-              );
-            })}
-          </div>
-
-          {item.splitType !== 'split' && item.splitType !== 'none' && item.splitType !== 'full' && (
-            <div className="flex items-center gap-2">
-              <span className="text-xs font-medium text-gray-600">
-                {item.splitType === 'amount' ? '相手の負担額:' : '相手の負担割合:'}
-              </span>
-              <input
-                type="number"
-                value={item.customValue}
-                onChange={e => onUpdateCustomValue(item.id, e.target.value)}
-                placeholder="0"
-                className="w-20 text-sm font-bold border-b-2 border-gray-300 focus:border-blue-600 outline-none text-center pb-0.5 bg-transparent"
-              />
-              <span className="text-xs font-medium text-gray-600">
-                {item.splitType === 'amount' ? '円' : '%'}
-              </span>
-            </div>
-          )}
-
-          <div className="flex items-center justify-between border-t border-gray-100/50 pt-2 mt-2">
-            <button
-              onClick={() => onDelete(item.id)}
-              className="text-[10px] text-gray-400 hover:text-red-500 flex items-center gap-1"
-            >
-              <Trash2 size={12} /> 削除
-            </button>
-            <span
-              className={`text-xs font-bold px-2 py-1 rounded ${
-                item.splitType === 'none' ? 'text-gray-500 bg-gray-100' : 'text-blue-600 bg-blue-50'
-              }`}
-            >
-              相手の負担: ¥{getItemRequestedAmount(item).toLocaleString()}
-            </span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-/** 一括設定バー: 選択中の全アイテムにまとめて splitType を適用する */
-function BulkSplitSetter({
-  onApply,
-}: {
-  onApply: (splitType: SplitType, customValue: string) => void;
-}) {
-  const [bulkType, setBulkType] = useState<Exclude<SplitType, 'none'> | null>(null);
-  const [bulkCustom, setBulkCustom] = useState('');
-
-  const handleSelectType = (type: Exclude<SplitType, 'none'>) => {
-    const next = bulkType === type ? null : type;
-    setBulkType(next);
-    setBulkCustom('');
-    if (next === 'split' || next === 'full') {
-      onApply(next, '');
-    }
-  };
-
-  const handleApplyCustom = () => {
-    if (!bulkType) return;
-    onApply(bulkType, bulkCustom);
-  };
-
-  const labels: Record<Exclude<SplitType, 'none'>, string> = {
-    split: '割り勘',
-    full: '全額',
-    amount: '金額',
-    percentage: '割合',
-  };
-
-  return (
-    <div className="p-3 bg-amber-50 border-b border-amber-100 space-y-2">
-      <div className="flex items-center gap-1.5">
-        <Layers size={13} className="text-amber-600" />
-        <p className="text-xs font-bold text-amber-700">一括設定（チェック中の項目に適用）</p>
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        {(['split', 'full', 'amount', 'percentage'] as const).map(type => (
-          <button
-            key={type}
-            onClick={() => handleSelectType(type)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-              bulkType === type
-                ? 'bg-amber-500 text-white shadow-sm'
-                : 'bg-white text-gray-600 border border-gray-200 hover:border-amber-400 hover:text-amber-700'
-            }`}
-          >
-            {labels[type]}
-          </button>
-        ))}
-      </div>
-
-      {(bulkType === 'amount' || bulkType === 'percentage') && (
-        <div className="flex items-center gap-2 animate-in slide-in-from-top-1 duration-150">
-          <span className="text-xs text-gray-600 font-medium">
-            {bulkType === 'amount' ? '負担額:' : '負担割合:'}
-          </span>
-          <input
-            type="number"
-            value={bulkCustom}
-            onChange={e => setBulkCustom(e.target.value)}
-            placeholder="0"
-            className="w-20 text-xs font-bold border border-gray-300 focus:border-amber-500 rounded-lg px-2 py-1.5 outline-none text-center bg-white"
-          />
-          <span className="text-xs text-gray-500">{bulkType === 'amount' ? '円' : '%'}</span>
-          <button
-            onClick={handleApplyCustom}
-            disabled={!bulkCustom}
-            className="px-3 py-1.5 bg-amber-500 disabled:bg-gray-200 disabled:text-gray-400 text-white rounded-lg text-xs font-bold transition-colors"
-          >
-            適用
-          </button>
-        </div>
-      )}
-    </div>
-  );
 }
 
 export function AddTransactionModal({
@@ -324,12 +119,9 @@ export function AddTransactionModal({
               <h3 className="font-bold text-gray-800">レシート読み取り・基本情報</h3>
             </div>
 
-            {/* カメラ/ファイル選択UI (スキャン済みでない場合のみ) */}
             {!form.scannedItems ? (
               <div className="space-y-3">
-                {/* カメラで撮る & 写真を添付 */}
                 <div className="grid grid-cols-2 gap-3">
-                  {/* ① カメラ直接起動 */}
                   <input
                     type="file"
                     accept="image/*"
@@ -359,7 +151,6 @@ export function AddTransactionModal({
                     </div>
                   </label>
 
-                  {/* ② ギャラリー/ファイルから選択 */}
                   <input
                     type="file"
                     accept="image/*"
@@ -455,7 +246,6 @@ export function AddTransactionModal({
                 </div>
               </div>
 
-              {/* 添付レシート画像プレビュー（タップで全画面表示） */}
               {form.receiptImageUrl && (
                 <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden">
                   <div className="p-3 bg-gray-50 border-b border-gray-100 flex items-center justify-between">
@@ -491,7 +281,6 @@ export function AddTransactionModal({
                   </p>
                 </div>
 
-                {/* 一括設定バー */}
                 <BulkSplitSetter onApply={form.bulkUpdateSplit} />
 
                 <div className="divide-y divide-gray-100">

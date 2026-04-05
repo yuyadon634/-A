@@ -3,8 +3,8 @@
 import { useState } from 'react';
 import { ChevronDown, CheckCircle2, ScanLine } from 'lucide-react';
 import { Transaction, User } from '@/types';
-import { getCategoryIcon } from '@/lib/utils';
-import { ReceiptImageModal } from './ReceiptImageModal';
+import { getCategoryIcon } from '@/lib/categoryUtils';
+import { ReceiptImageModal } from '@/components/modals/ReceiptImageModal';
 
 interface CompletedHistoryProps {
   completedTransactions: Transaction[];

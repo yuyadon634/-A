@@ -1,50 +1,26 @@
+/**
+ * 申請フォームの state・バリデーション・Supabase 送信を担うカスタムフック（オーケストレーター）。
+ *
+ * 責務：
+ *  - コアフォーム state の管理（金額・カテゴリ・精算方法・メッセージ・送信中フラグ）
+ *  - useReceiptItems を通じたレシート明細の管理
+ *  - compressImageToDataUrl / scanReceiptFile を使った OCR フロー
+ *  - 送信バリデーションと Supabase INSERT
+ */
 import { useState, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
-import { getItemRequestedAmount } from '@/lib/utils';
-import { Transaction, ReceiptItem, SplitType, User } from '@/types';
+import { getItemRequestedAmount } from '@/lib/transactionUtils';
+import { compressImageToDataUrl } from '@/lib/imageUtils';
+import { scanReceiptFile } from '@/lib/ocrClient';
+import { useReceiptItems } from '@/hooks/useReceiptItems';
+import { Transaction, SplitType, User } from '@/types';
+
+// ---------- ローカルユーティリティ（このフック内でのみ使用） ----------
 
 /**
- * レシート画像をクライアント側で圧縮し、data URL として返す。
- * Supabase Storage 不要で DB の TEXT カラムに直接保存できる。
- * 最大辺 800px・JPEG 品質 65% に圧縮（目安: 70〜180KB → base64 で 100〜250KB）
+ * 差戻された申請を再編集するとき、元の数値入力欄（customValue）を復元する。
+ * DB には requestedAmount しか保存されていないため、splitType に応じて逆算が必要。
  */
-function compressImageToDataUrl(file: File): Promise<string | null> {
-  return new Promise(resolve => {
-    const img = new Image();
-    const objectUrl = URL.createObjectURL(file);
-    img.onload = () => {
-      const MAX_PX = 800;
-      let { width, height } = img;
-      if (width > height) {
-        if (width > MAX_PX) { height = Math.round((height * MAX_PX) / width); width = MAX_PX; }
-      } else {
-        if (height > MAX_PX) { width = Math.round((width * MAX_PX) / height); height = MAX_PX; }
-      }
-      const canvas = document.createElement('canvas');
-      canvas.width = width;
-      canvas.height = height;
-      const ctx = canvas.getContext('2d');
-      if (!ctx) { URL.revokeObjectURL(objectUrl); resolve(null); return; }
-      ctx.drawImage(img, 0, 0, width, height);
-      URL.revokeObjectURL(objectUrl);
-      resolve(canvas.toDataURL('image/jpeg', 0.65));
-    };
-    img.onerror = () => { URL.revokeObjectURL(objectUrl); resolve(null); };
-    img.src = objectUrl;
-  });
-}
-
-/** OCR APIレスポンスのアイテムをランタイムで型検証 */
-function isOcrItem(v: unknown): v is { name: string; price: number } {
-  return (
-    typeof v === 'object' &&
-    v !== null &&
-    typeof (v as Record<string, unknown>).name === 'string' &&
-    typeof (v as Record<string, unknown>).price === 'number'
-  );
-}
-
-/** 既存トランザクションから手動入力の customValue を逆算する */
 function deriveCustomValue(tx: Transaction): string {
   if (tx.splitType === 'amount') return tx.requestedAmount.toString();
   if (tx.splitType === 'percentage' && tx.amount > 0) {
@@ -53,125 +29,127 @@ function deriveCustomValue(tx: Transaction): string {
   return '';
 }
 
-/** 既存トランザクションのレシート明細があるか（明細モードか） */
+/** レシート明細を持つトランザクションか（明細モードで開くかの判定に使用） */
 function hasReceiptItems(tx: Transaction): boolean {
   return !!(tx.receiptItems && tx.receiptItems.length > 0);
 }
 
+// ---------- フック本体 ----------
 
 export function useTransactionForm(
   currentUser: User,
   onSuccess: (newTx: Transaction) => void,
   initialTransaction?: Transaction,
 ) {
-  const init = initialTransaction;
-  const [inputAmount, setInputAmount] = useState(init ? init.amount.toString() : '');
-  const [category, setCategory] = useState(init?.category ?? '');
+  // コアフォーム state（編集モードの場合は既存値で初期化）
+  const [inputAmount, setInputAmount] = useState(
+    initialTransaction ? initialTransaction.amount.toString() : '',
+  );
+  const [category, setCategory] = useState(initialTransaction?.category ?? '');
   const [splitType, setSplitType] = useState<SplitType>(
-    init && !hasReceiptItems(init) ? init.splitType : 'none',
+    // 明細モードの場合は splitType を 'none' に戻す（明細側で個別に管理するため）
+    initialTransaction && !hasReceiptItems(initialTransaction) ? initialTransaction.splitType : 'none',
   );
   const [customValue, setCustomValue] = useState(
-    init && !hasReceiptItems(init) ? deriveCustomValue(init) : '',
+    initialTransaction && !hasReceiptItems(initialTransaction)
+      ? deriveCustomValue(initialTransaction)
+      : '',
   );
-  const [message, setMessage] = useState(init?.message ?? '');
+  const [message, setMessage] = useState(initialTransaction?.message ?? '');
   const [isScanning, setIsScanning] = useState(false);
-  const [scannedItems, setScannedItems] = useState<ReceiptItem[] | null>(
-    init && hasReceiptItems(init) ? (init.receiptItems ?? null) : null,
-  );
   const [receiptImageUrl, setReceiptImageUrl] = useState<string | null>(
-    init?.receiptImageUrl ?? null,
+    initialTransaction?.receiptImageUrl ?? null,
   );
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // カメラ用 input ref
+  // Refs
   const fileInputRef = useRef<HTMLInputElement>(null);
-  // ギャラリー/ファイル選択用 input ref
   const galleryInputRef = useRef<HTMLInputElement>(null);
-
-  // 二重送信防止（state は非同期なので Ref で同期ガード）
-  const isSubmittingRef = useRef(false);
-  // アンマウント後の setState 防止 + スキャン中のキャンセル
+  /**
+   * 非同期の送信処理中に同じボタンが再度押されても二重送信しないための同期ガード。
+   * state（isSubmitting）は React の非同期更新のため、同一イベントループ内では確実でない。
+   */
+  const preventDoubleSubmitRef = useRef(false);
   const abortControllerRef = useRef<AbortController | null>(null);
 
+  // レシート明細の管理を専用フックに委譲
+  const receiptItems = useReceiptItems(
+    initialTransaction && hasReceiptItems(initialTransaction)
+      ? (initialTransaction.receiptItems ?? null)
+      : null,
+    setInputAmount,
+  );
+
+  // 明細モード判定（複数箇所で参照するためローカル変数化して重複を排除）
+  const isItemizedMode = !!(receiptItems.scannedItems && receiptItems.scannedItems.length > 0);
+
+  // ---------- 金額計算 ----------
+
+  /** 明細モード時はチェック済みアイテムの合計、通常モード時は手動入力値を返す */
   const getSharedTotal = (): number => {
-    if (scannedItems && scannedItems.length > 0) {
-      return scannedItems
+    if (isItemizedMode) {
+      return receiptItems.scannedItems!
         .filter(item => item.selected)
         .reduce((sum, item) => sum + (Number(item.price) || 0), 0);
     }
     return parseInt(inputAmount, 10) || 0;
   };
 
+  /** 相手に請求する金額を算出する */
   const getRequestedAmount = (): number => {
-    if (scannedItems && scannedItems.length > 0) {
-      return scannedItems.reduce((sum, item) => sum + getItemRequestedAmount(item), 0);
+    if (isItemizedMode) {
+      return receiptItems.scannedItems!.reduce(
+        (sum, item) => sum + getItemRequestedAmount(item),
+        0,
+      );
     }
-    const numAmount = parseInt(inputAmount, 10) || 0;
+    const parsedAmount = parseInt(inputAmount, 10) || 0;
     if (splitType === 'none') return 0;
-    if (splitType === 'split') return Math.floor(numAmount / 2);
-    if (splitType === 'full') return numAmount;
-    const numCustom = parseInt(customValue, 10) || 0;
-    if (splitType === 'amount') return numCustom > numAmount ? numAmount : numCustom;
-    if (splitType === 'percentage') return Math.floor(numAmount * (numCustom / 100));
+    if (splitType === 'split') return Math.floor(parsedAmount / 2);
+    if (splitType === 'full') return parsedAmount;
+    const parsedCustomValue = parseInt(customValue, 10) || 0;
+    // 指定金額が総額を超えていたら総額を上限にする
+    if (splitType === 'amount') return parsedCustomValue > parsedAmount ? parsedAmount : parsedCustomValue;
+    if (splitType === 'percentage') return Math.floor(parsedAmount * (parsedCustomValue / 100));
     return 0;
   };
 
+  // ---------- OCR フロー ----------
+
   /**
    * カメラ撮影またはファイル選択で呼ばれる共通ハンドラ。
-   * OCR（fetch）と画像アップロード（Supabase Storage）を並行実行する。
+   * OCR（API fetch）と画像圧縮（ローカル Canvas 処理）を Promise.all で並行実行し、
+   * 合計待ち時間を短縮する。
    */
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (!e.target.files || e.target.files.length === 0) return;
     const file = e.target.files[0];
 
-    // 前回のスキャンが進行中なら中断して新しいスキャンを開始
+    // 前回のスキャンが進行中なら中断して新しいスキャンを優先する
     abortControllerRef.current?.abort();
     const controller = new AbortController();
     abortControllerRef.current = controller;
 
     setIsScanning(true);
-    setScannedItems(null);
+    receiptItems.setScannedItems(null);
     setReceiptImageUrl(null);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-
-      // OCRと画像圧縮を並行実行（圧縮はローカル処理のため Storage 不要）
-      const [res, imageUrl] = await Promise.all([
-        fetch('/api/ocr', { method: 'POST', body: formData, signal: controller.signal }),
+      const [newItems, compressedImageUrl] = await Promise.all([
+        scanReceiptFile(file, controller.signal),
         compressImageToDataUrl(file),
       ]);
 
-      // 別の選択が行われていたらスキップ
+      // 別の画像が選択されて controller が差し替わっていたらこの結果は捨てる
       if (abortControllerRef.current !== controller) return;
 
-      if (!res.ok) {
-        const errorData = await res.json().catch(() => ({}));
-        throw new Error(
-          (errorData as { error?: string }).error ?? 'レシートの読み取りに失敗しました',
-        );
+      if (newItems.length > 0) {
+        receiptItems.setScannedItems(newItems);
+        const ocrTotal = newItems.reduce((sum, item) => sum + item.price, 0);
+        setInputAmount(ocrTotal.toString());
       }
 
-      const data: unknown = await res.json();
-      const items = (data as { items?: unknown }).items;
-
-      if (Array.isArray(items)) {
-        const newItems: ReceiptItem[] = items.filter(isOcrItem).map(item => ({
-          id: crypto.randomUUID(),
-          name: item.name || '不明な項目',
-          price: item.price || 0,
-          selected: true,
-          splitType: 'none' as SplitType,
-          customValue: '',
-        }));
-        setScannedItems(newItems);
-        const total = newItems.reduce((sum, item) => sum + item.price, 0);
-        setInputAmount(total.toString());
-      }
-
-      // アップロードが成功していれば URL を保持（失敗時は null のまま）
-      setReceiptImageUrl(imageUrl);
+      setReceiptImageUrl(compressedImageUrl);
     } catch (err) {
       if (err instanceof Error && err.name === 'AbortError') return;
       console.error('OCR error:', err);
@@ -187,88 +165,7 @@ export function useTransactionForm(
     }
   };
 
-  const toggleItemSelection = (id: string) => {
-    setScannedItems(prev =>
-      prev ? prev.map(item => (item.id === id ? { ...item, selected: !item.selected } : item)) : null,
-    );
-  };
-
-  const updateItemSplit = (id: string, newSplitType: SplitType) => {
-    setScannedItems(prev =>
-      prev
-        ? prev.map(item => (item.id === id ? { ...item, splitType: newSplitType } : item))
-        : null,
-    );
-  };
-
-  const updateItemCustomValue = (id: string, val: string) => {
-    setScannedItems(prev =>
-      prev
-        ? prev.map(item => (item.id === id ? { ...item, customValue: val } : item))
-        : null,
-    );
-  };
-
-  const updateItemDetail = (id: string, field: 'name' | 'price', val: string) => {
-    setScannedItems(prev => {
-      if (!prev) return null;
-      const newItems = prev.map(item => {
-        if (item.id !== id) return item;
-        return { ...item, [field]: field === 'price' ? (parseInt(val, 10) || 0) : val };
-      });
-      if (field === 'price') {
-        const total = newItems.reduce((sum, item) => sum + item.price, 0);
-        setInputAmount(total.toString());
-      }
-      return newItems;
-    });
-  };
-
-  /** チェック済み（selected）の全アイテムに一括で splitType を適用する */
-  const bulkUpdateSplit = (splitType: SplitType, customValue: string = '') => {
-    setScannedItems(prev =>
-      prev
-        ? prev.map(item =>
-            item.selected
-              ? {
-                  ...item,
-                  splitType,
-                  customValue: splitType === 'amount' || splitType === 'percentage' ? customValue : '',
-                }
-              : item,
-          )
-        : null,
-    );
-  };
-
-  const addManualItem = () => {
-    const newItem: ReceiptItem = {
-      id: crypto.randomUUID(),
-      name: '',
-      price: 0,
-      selected: true,
-      splitType: 'none',
-      customValue: '',
-    };
-    setScannedItems(prev => {
-      if (!prev) {
-        // 初回：明細モードに入る時点で inputAmount を 0 に初期化
-        setInputAmount('0');
-        return [newItem];
-      }
-      return [...prev, newItem];
-    });
-  };
-
-  const deleteItem = (id: string) => {
-    setScannedItems(prev => {
-      if (!prev) return null;
-      const newItems = prev.filter(item => item.id !== id);
-      const total = newItems.reduce((sum, item) => sum + item.price, 0);
-      setInputAmount(total.toString());
-      return newItems;
-    });
-  };
+  // ---------- フォームリセット ----------
 
   const resetForm = () => {
     abortControllerRef.current?.abort();
@@ -279,27 +176,29 @@ export function useTransactionForm(
     setSplitType('none');
     setCustomValue('');
     setMessage('');
-    setScannedItems(null);
+    receiptItems.setScannedItems(null);
     setReceiptImageUrl(null);
     setIsScanning(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (galleryInputRef.current) galleryInputRef.current.value = '';
   };
 
-  const handleSubmit = async () => {
-    if (isSubmittingRef.current) return;
+  // ---------- 送信バリデーション & Supabase INSERT ----------
 
-    const numAmount = parseInt(inputAmount, 10);
-    if (!numAmount || numAmount <= 0) {
+  const handleSubmit = async () => {
+    if (preventDoubleSubmitRef.current) return;
+
+    const parsedAmount = parseInt(inputAmount, 10);
+    if (!parsedAmount || parsedAmount <= 0) {
       alert('金額を入力してください');
       return;
     }
 
-    if (scannedItems && scannedItems.length > 0) {
-      const hasUnselectedSplit = scannedItems.some(
+    if (isItemizedMode) {
+      const hasItemWithNoSplit = receiptItems.scannedItems!.some(
         item => item.selected && item.splitType === 'none',
       );
-      if (hasUnselectedSplit) {
+      if (hasItemWithNoSplit) {
         alert(
           '精算方法が選ばれていない項目があります。\nチェックした項目すべてに「割り勘」などを設定してください。',
         );
@@ -313,22 +212,22 @@ export function useTransactionForm(
     }
 
     const requestedAmount = getRequestedAmount();
-    // receipt_image_url カラムが DB に存在しない場合でも動くよう、
-    // null 値のオプションカラムはペイロードに含めない
     const newTxData: Record<string, unknown> = {
       date: new Date().toISOString().split('T')[0],
-      amount: numAmount,
+      amount: parsedAmount,
       paid_by: currentUser,
       requested_amount: requestedAmount,
-      split_type: scannedItems && scannedItems.length > 0 ? 'split' : splitType,
+      // 明細モードの場合、個別設定が異なるため split_type は 'split' に統一する
+      split_type: isItemizedMode ? 'split' : splitType,
       status: 'pending',
       category: category,
-      receipt_items: scannedItems || [],
+      receipt_items: receiptItems.scannedItems || [],
       message: message.trim() || null,
     };
+    // receipt_image_url はオプションカラムのため、値がある場合のみ追加する
     if (receiptImageUrl) newTxData.receipt_image_url = receiptImageUrl;
 
-    isSubmittingRef.current = true;
+    preventDoubleSubmitRef.current = true;
     setIsSubmitting(true);
     try {
       const { data, error } = await supabase
@@ -363,12 +262,13 @@ export function useTransactionForm(
       console.error('Submit Error:', err);
       alert('申請に失敗しました。');
     } finally {
-      isSubmittingRef.current = false;
+      preventDoubleSubmitRef.current = false;
       setIsSubmitting(false);
     }
   };
 
   return {
+    // コアフォーム state
     inputAmount,
     setInputAmount,
     category,
@@ -380,23 +280,26 @@ export function useTransactionForm(
     message,
     setMessage,
     isScanning,
-    scannedItems,
-    setScannedItems,
     receiptImageUrl,
     setReceiptImageUrl,
     isSubmitting,
+    // refs
     fileInputRef,
     galleryInputRef,
+    // レシート明細（useReceiptItems から展開）
+    scannedItems: receiptItems.scannedItems,
+    setScannedItems: receiptItems.setScannedItems,
+    toggleItemSelection: receiptItems.toggleItemSelection,
+    updateItemSplit: receiptItems.updateItemSplit,
+    updateItemCustomValue: receiptItems.updateItemCustomValue,
+    updateItemDetail: receiptItems.updateItemDetail,
+    bulkUpdateSplit: receiptItems.bulkUpdateSplit,
+    addManualItem: receiptItems.addManualItem,
+    deleteItem: receiptItems.deleteItem,
+    // 計算・OCR・送信
     getSharedTotal,
     getRequestedAmount,
     handleFileChange,
-    toggleItemSelection,
-    updateItemSplit,
-    updateItemCustomValue,
-    updateItemDetail,
-    bulkUpdateSplit,
-    addManualItem,
-    deleteItem,
     resetForm,
     handleSubmit,
   };
