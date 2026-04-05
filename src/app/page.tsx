@@ -20,15 +20,9 @@ import { UserSelectScreen } from '@/components/UserSelectScreen';
 const STORAGE_KEY_USER = 'selectedUser';
 
 export default function Home() {
-  const [currentUser, setCurrentUser] = useState<User>(() => {
-    if (typeof window === 'undefined') return '夫';
-    const saved = localStorage.getItem(STORAGE_KEY_USER);
-    return saved === '妻' ? '妻' : '夫';
-  });
-  const [isUserSelected, setIsUserSelected] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem(STORAGE_KEY_USER) !== null;
-  });
+  // null = マウント前（サーバー・クライアント両方でnullに揃えてHydrationを回避）
+  const [isUserSelected, setIsUserSelected] = useState<boolean | null>(null);
+  const [currentUser, setCurrentUser] = useState<User>('夫');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [expandedTxId, setExpandedTxId] = useState<string | null>(null);
@@ -38,9 +32,20 @@ export default function Home() {
   const tx = useTransactions(currentUser, settings.user1Name, settings.user2Name);
 
   useEffect(() => {
-    tx.fetchTransactions();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // マウント後にlocalStorageを読み込む（SSRと一致させるためuseEffect内で行う）
+    const saved = localStorage.getItem(STORAGE_KEY_USER);
+    if (saved === '夫' || saved === '妻') {
+      setCurrentUser(saved);
+      setIsUserSelected(true);
+    } else {
+      setIsUserSelected(false);
+    }
   }, []);
+
+  useEffect(() => {
+    if (isUserSelected) tx.fetchTransactions();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isUserSelected]);
 
   const currentDisplayName = settings.getDisplayName(currentUser);
   const otherUser: User = currentUser === '夫' ? '妻' : '夫';
@@ -72,6 +77,9 @@ export default function Home() {
   const handleSaveSettings = () => {
     settings.saveSettings(() => setIsSettingsOpen(false));
   };
+
+  // マウント前はサーバーと同じ空描画にしてHydrationを回避
+  if (isUserSelected === null) return null;
 
   if (!isUserSelected) {
     return (
