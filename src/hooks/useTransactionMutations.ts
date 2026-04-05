@@ -165,6 +165,31 @@ export function useTransactionMutations(
       alert('拒否処理に失敗しました');
     });
 
+  /** 承認待ち中の自分の申請を取り下げる（相手の承認不要・即時削除） */
+  const withdrawPendingTransaction = async (id: string): Promise<boolean> => {
+    const target = transactions.find(
+      t => t.id === id && t.status === 'pending' && t.paidBy === currentUser,
+    );
+    if (!target) return false;
+    if (!confirm('この申請を取り下げますか？取り消せません。')) return false;
+
+    const key = `withdraw-pending-${id}`;
+    if (inProgressKeysRef.current.has(key)) return false;
+    inProgressKeysRef.current.add(key);
+    try {
+      const { error } = await supabase.from('transactions').delete().eq('id', id);
+      if (error) throw error;
+      setTransactions(prev => prev.filter(tx => tx.id !== id));
+      return true;
+    } catch (err) {
+      console.error('Error withdrawing pending transaction:', err);
+      alert('取り下げに失敗しました');
+      return false;
+    } finally {
+      inProgressKeysRef.current.delete(key);
+    }
+  };
+
   /** 差戻し中かつ自分が申請した取引のみ削除（相手の承認不要） */
   const deleteRejectedTransaction = async (id: string): Promise<boolean> => {
     const target = transactions.find(
@@ -290,6 +315,7 @@ export function useTransactionMutations(
     requestDelete,
     approveDelete,
     rejectDelete,
+    withdrawPendingTransaction,
     deleteRejectedTransaction,
     requestSettlement,
     approveSettlement,

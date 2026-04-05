@@ -157,7 +157,10 @@ export default function Home() {
           onReject={(id, message) => tx.handleReject(id, message)}
         />
 
-        <MyPendingList myPendingTransactions={tx.myPendingTransactions} />
+        <MyPendingList
+          myPendingTransactions={tx.myPendingTransactions}
+          onWithdraw={tx.withdrawPendingTransaction}
+        />
 
         <MyRejectedList
           myRejectedTransactions={tx.myRejectedTransactions}

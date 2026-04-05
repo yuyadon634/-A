@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { Clock, ChevronDown, MessageSquare, ScanLine } from 'lucide-react';
+import { Clock, ChevronDown, MessageSquare, ScanLine, Undo2 } from 'lucide-react';
 import { Transaction } from '@/types';
 import { getCategoryIcon } from '@/lib/categoryUtils';
 import { ReceiptItemAccordion } from './TransactionCard';
@@ -10,9 +10,10 @@ import { getDaysElapsed, getOverdueBadge } from '@/lib/dateUtils';
 
 interface MyPendingListProps {
   myPendingTransactions: Transaction[];
+  onWithdraw: (id: string) => Promise<boolean>;
 }
 
-export function MyPendingList({ myPendingTransactions }: MyPendingListProps) {
+export function MyPendingList({ myPendingTransactions, onWithdraw }: MyPendingListProps) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [receiptUrl, setReceiptUrl] = useState<string | null>(null);
 
@@ -114,7 +115,7 @@ export function MyPendingList({ myPendingTransactions }: MyPendingListProps) {
               )}
 
               {tx.receiptImageUrl && (
-                <div className="px-4 pb-4">
+                <div className="px-4 pb-2">
                   <button
                     onClick={() => setReceiptUrl(tx.receiptImageUrl!)}
                     className="w-full flex items-center justify-center gap-1.5 text-xs font-bold text-blue-600 bg-blue-50 border border-blue-100 py-2 rounded-lg hover:bg-blue-100 transition-colors"
@@ -123,6 +124,18 @@ export function MyPendingList({ myPendingTransactions }: MyPendingListProps) {
                   </button>
                 </div>
               )}
+
+              <div className="px-4 pb-4 pt-1">
+                <button
+                  onClick={e => {
+                    e.stopPropagation();
+                    onWithdraw(tx.id);
+                  }}
+                  className="w-full flex items-center justify-center gap-1.5 text-xs font-bold text-gray-500 bg-gray-50 border border-gray-200 py-2 rounded-lg hover:bg-red-50 hover:text-red-500 hover:border-red-200 transition-colors"
+                >
+                  <Undo2 size={13} /> この申請を取り下げる
+                </button>
+              </div>
             </div>
           );
         })}
