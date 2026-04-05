@@ -423,21 +423,23 @@ export function AddTransactionModal({
                   className="w-full bg-gray-50 border border-gray-200 text-gray-800 text-sm rounded-xl focus:ring-blue-500 focus:border-blue-500 block p-3 outline-none font-medium"
                 />
               </div>
-              <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1.5">
-                  合計金額（手入力も可）
-                </label>
-                <div className="flex items-center bg-gray-50 border border-gray-200 rounded-xl px-3 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all">
-                  <span className="text-gray-500 font-bold mr-1">¥</span>
-                  <input
-                    type="number"
-                    value={form.inputAmount}
-                    onChange={e => form.setInputAmount(e.target.value)}
-                    className="w-full bg-transparent text-lg font-bold text-gray-900 outline-none py-2.5"
-                    placeholder="0"
-                  />
+              {!form.scannedItems && (
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1.5">
+                    合計金額（手入力も可）
+                  </label>
+                  <div className="flex items-center bg-gray-50 border border-gray-200 rounded-xl px-3 focus-within:border-blue-500 focus-within:ring-1 focus-within:ring-blue-500 transition-all">
+                    <span className="text-gray-500 font-bold mr-1">¥</span>
+                    <input
+                      type="number"
+                      value={form.inputAmount}
+                      onChange={e => form.setInputAmount(e.target.value)}
+                      className="w-full bg-transparent text-lg font-bold text-gray-900 outline-none py-2.5"
+                      placeholder="0"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
 

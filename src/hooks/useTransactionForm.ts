@@ -250,7 +250,14 @@ export function useTransactionForm(
       splitType: 'none',
       customValue: '',
     };
-    setScannedItems(prev => (prev ? [...prev, newItem] : [newItem]));
+    setScannedItems(prev => {
+      if (!prev) {
+        // 初回：明細モードに入る時点で inputAmount を 0 に初期化
+        setInputAmount('0');
+        return [newItem];
+      }
+      return [...prev, newItem];
+    });
   };
 
   const deleteItem = (id: string) => {
